@@ -1,5 +1,14 @@
 # BoostBuddy Changelog
 
+## 1.0.9 — 2026-08-06
+
+- The last-run announcement now reads "(final run starting now!)" instead of
+  "(Last Run!!)", making it unmistakable that the run just beginning is still
+  a paid one - counts tick when a run starts, and the old wording could be
+  misread as "the package is already finished".
+- `/boost total` changes now sync to the customer's live package display
+  immediately, like every other package edit already did.
+
 ## 1.0.8 — 2026-08-06
 
 - BoostBuddy now understands **NovaInstanceTracker and NovaWorldBuffs**: when

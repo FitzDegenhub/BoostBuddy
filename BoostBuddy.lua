@@ -446,7 +446,7 @@ local function CountRun(source)
         local function LineFor(name)
             local c = db.customers[name]
             local text = name .. " " .. c.used .. "/" .. c.total
-            if c.used >= c.total then text = text .. " (Last Run!!)" end
+            if c.used >= c.total then text = text .. " (final run starting now!)" end
             return text
         end
         if source == "manual" then
@@ -1614,7 +1614,7 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
                     for _, name in ipairs(started) do
                         local c = db.customers[name]
                         Announce(name .. " " .. c.used .. "/" .. c.total ..
-                            (c.used >= c.total and " (Last Run!!)" or ""))
+                            (c.used >= c.total and " (final run starting now!)" or ""))
                     end
                 end
                 BroadcastState()
@@ -1734,6 +1734,7 @@ SlashCmdList["BOOSTBUDDY"] = function(input)
             c.total = tonumber(b)
             AnnounceAlways("MANUAL: " .. UnitName("player") .. " set " .. Cap(a) ..
                 "'s package to " .. c.used .. "/" .. c.total)
+            BroadcastState()
         else
             Print(Cap(a) .. " is not registered")
         end
