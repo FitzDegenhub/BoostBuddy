@@ -1,5 +1,14 @@
 # BoostBuddy Changelog
 
+## 1.0.7 — 2026-08-06
+
+- Fixed run counting when a package is activated **outside** the instance:
+  it now shows 0/N until you zone in, ticks to 1/N on entry, and no longer
+  phantom-counts on the first pull.
+- Joining a group mid-run and activating a package now correctly adopts the
+  current instance as run 1 instead of double-counting when the boosters
+  engage.
+
 ## 1.0.6 — 2026-08-06
 
 - The **Undo Last** button now asks for confirmation, showing exactly what

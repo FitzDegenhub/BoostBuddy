@@ -115,10 +115,19 @@ local function SameInstance(a, b)
     return tail(a) == tail(b)
 end
 
+-- spawn-detection state (declared here so StartingUsed can reference it)
+local visitConfirmed, pendingSpawn = false, nil
+
 -- if the group is mid-run when someone gets added, that run is their first:
--- start them at 1 so the count never trails reality by one
+-- start them at 1 so the count never trails reality by one. If we haven't yet
+-- confirmed this instance's spawn id (we may be holding a stale one from a
+-- previous instance), mark the current run already-counted so the first mob
+-- we see adopts the new spawn as the baseline instead of counting a phantom.
 local function StartingUsed()
-    return db.enteredSinceCount and 1 or 0
+    local _, instType = IsInInstance()
+    if instType ~= "party" and instType ~= "raid" then return 0 end
+    if not visitConfirmed then db.cycleCounted = true end
+    return 1
 end
 
 local function GroupNames()
@@ -569,8 +578,6 @@ end
 -- id that changes when the instance is reset. Seeing a different id than last
 -- visit proves we are in a fresh instance, so the previous run completed --
 -- even if the reset message and relay were both missed.
-local visitConfirmed, pendingSpawn = false, nil
-
 local function OnSpawnConfirmed(spawn)
     if db.spawnID == spawn then
         if db.debug then Print("debug: same instance as before (spawn " .. spawn .. ")") end
@@ -1503,6 +1510,33 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
         local isLoginOrReload = (event == "PLAYER_ENTERING_WORLD") and (arg1 or arg2)
         if inside and not isLoginOrReload and (not cdb.runStart or (cdb.runXP or 0) == 0) then
             cdb.runStart = time()   -- fresh cycle: clock starts at this zone-in
+        end
+        -- entering a tracked instance is the start of run 1 for anyone still at
+        -- 0 (e.g. registered while standing outside). Promote them and adopt
+        -- this instance as the baseline so the first pull doesn't count again.
+        if inside and not isLoginOrReload and Engaged() then
+            local present, started = GroupNames(), {}
+            for name, c in pairs(db.customers) do
+                if present[name] and c.used == 0 then
+                    c.used = 1
+                    table.insert(started, name)
+                end
+            end
+            if #started > 0 then
+                db.cycleCounted = true
+                cdb.runStart = time()
+                cdb.runXP = 0
+                table.sort(started)
+                if IAmAnnouncer() then
+                    Announce("New Instance Run Detected")
+                    for _, name in ipairs(started) do
+                        local c = db.customers[name]
+                        Announce(name .. " " .. c.used .. "/" .. c.total ..
+                            (c.used >= c.total and " (Last Run!!)" or ""))
+                    end
+                end
+                BroadcastState()
+            end
         end
         if db.uiShown and not ui:IsShown() then ui:Show() end   -- survive zoning
         Render()
