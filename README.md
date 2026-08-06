@@ -12,6 +12,7 @@ Counts runs on every reset, manages customers' paid packages, and shows boostees
 
 [![CurseForge](https://img.shields.io/badge/CurseForge-download-f16436?style=flat-square&logo=curseforge&logoColor=white)](https://www.curseforge.com/wow/addons/boost-buddy)
 [![Wago](https://img.shields.io/badge/Wago-download-c1272d?style=flat-square)](https://addons.wago.io/addons/boost-buddy)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-buy%20me%20a%20coffee-ff5e5b?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/0xfitz)
 
 *Selling carry runs? Buying them? Someone always ends up tallying runs on a piece of paper, and someone always ends up arguing about the count.*
 
@@ -147,5 +148,7 @@ BoostBuddy is a run tracker for boost runs traded **in-game for gold**, which Bl
 *Built for WoW Classic: TBC Anniversary & Classic Era • No dependencies • No configuration • No nonsense*
 
 **Free and open source ([GPLv3](LICENSE))** • Issues and pull requests welcome
+
+Enjoying BoostBuddy? [Buy me a coffee ☕](https://ko-fi.com/0xfitz)
 
 </div>
