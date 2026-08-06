@@ -2,9 +2,12 @@
 ## Title: BoostBuddy
 ## Notes: Boost run tracking for boosters AND boostees: packages, XP per run, ready alerts. /boost or /bb opens the window.
 ## Author: Fitz
-## Version: 1.0.7
+## Version: 1.0.8
 ## X-License: GPLv3
 ## SavedVariables: BoostBuddyDB, BoostCounterDB
 ## SavedVariablesPerCharacter: BoostBuddyCharDB
 
+LibStub.lua
+LibDeflate.lua
+LibSerialize.lua
 BoostBuddy.lua

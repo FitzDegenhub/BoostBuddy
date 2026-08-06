@@ -64,11 +64,12 @@ The first time you open BoostBuddy it asks one question: **are you a booster or 
 
 ## How the Counting Works *(the nerdy bit)*
 
-BoostBuddy detects completed runs three independent ways, and uses whichever fires first:
+BoostBuddy detects completed runs four independent ways, and uses whichever fires first:
 
 1. **Instance reset messages**, seen by the resetter and relayed silently to every BoostBuddy in the group.
-2. **Difficulty-toggle resets**, the *"(All saved instances have been reset)"* message the whole group sees.
-3. **Fresh-instance proof via creature GUIDs.** Every mob carries an ID that changes when an instance is reset. If the mobs are new, the run counted — even if every reset message was missed and the resetter has no addon at all.
+2. **NovaInstanceTracker / NovaWorldBuffs relays.** Leader resets with a Nova addon instead? BoostBuddy speaks their protocol — their reset relays and chat announcements count instantly, with nothing needed on the resetter's side.
+3. **Difficulty-toggle resets**, the *"(All saved instances have been reset)"* message the whole group sees.
+4. **Fresh-instance proof via creature GUIDs.** Every mob carries an ID that changes when an instance is reset. If the mobs are new, the run counted — even if every reset message was missed and the resetter has no addon at all.
 
 A guard system guarantees **exactly one count per physical instance**, no matter how many redundant signals arrive. Multiple people running the addon? They elect one announcer. No chat spam, ever.
 

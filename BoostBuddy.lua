@@ -139,6 +139,15 @@ local function GroupNames()
     return names
 end
 
+-- only the group leader can reset an instance, so relayed/announced reset
+-- claims are believed only when they come from the leader
+local function SenderIsGroupLeader(sender)
+    for _, u in ipairs(GroupUnits()) do
+        if UnitName(u) == sender and UnitIsGroupLeader(u) then return true end
+    end
+    return false
+end
+
 -- ================================================================== tally ==
 local tally = CreateFrame("Frame", "BoostBuddyFrame", UIParent)
 tally:SetSize(220, 48)
@@ -461,6 +470,9 @@ local function CountRun(source)
             end
         end
         if source ~= "manual" then
+            if source == "fresh instance" then
+                Print(GREY .. "counted on first mob contact - the reset itself never reached your addon|r")
+            end
             local link = "|Hgarrmission:boostbuddyundo|h" .. RED .. "[undo last count]|r|h"
             local dur = cdb.lastBankedDur
             local suspicious
@@ -487,7 +499,7 @@ local function CountRun(source)
                 Print(RED .. suspicious .. " - accidental reset?|r " .. link)
                 PlaySound(8959, "Master")
             else
-                Print(GREY .. "miscounted?|r " .. link)
+                Print(GREY .. "undo available:|r " .. link)
             end
         end
     else
@@ -571,6 +583,45 @@ local function OnInstanceReset(instanceName, viaRelay)
     end
     if db.debug then Print("debug: reset accepted (" .. (viaRelay and "relayed" or "local") .. "), counting") end
     CountRun(instanceName .. " reset")
+end
+
+-- ==================== Nova addon (NIT / NWB) reset interop ====================
+-- NovaInstanceTracker (and NovaWorldBuffs) relay the group leader's instance
+-- resets to the whole group on addon prefix "NIT", so crews that reset with a
+-- Nova addon give us the same instant counts as crews running BoostBuddy.
+-- Wire format: AceSerializer string -> LibDeflate deflate -> addon-channel
+-- encode. Decoded text is "instanceReset <version> <instance>" (variants:
+-- instanceResetNoMsg, instanceResetOther).
+local NOVA_PREFIX = "NIT"
+local function DecodeNovaMessage(text)
+    local LD = LibStub and LibStub:GetLibrary("LibDeflate", true)
+    if not LD or type(text) ~= "string" or text == "" then return end
+    local first = text:byte(1)
+    if first and first <= 3 then return end        -- AceComm multi-part chunk (big data sync, never a reset)
+    if first == 4 then text = text:sub(2) end      -- AceComm escape byte before a control character
+    local decoded = LD:DecodeForWoWAddonChannel(text)
+    local decompressed = decoded and LD:DecompressDeflate(decoded)
+    if not decompressed then return end
+    -- current Nova versions serialize with LibSerialize (binary format)
+    local LS = LibStub:GetLibrary("LibSerialize", true)
+    if LS then
+        local ok, success, value = pcall(LS.Deserialize, LS, decompressed)
+        if ok and success and type(value) == "string" then return value end
+    end
+    -- older Nova versions used AceSerializer: a single plain string comes
+    -- through as "^1^S<escaped>^^" with "~"-escapes for nonprintables
+    local s = decompressed:match("^%^1%^S(.-)%^%^%s*$")
+    if not s then return end
+    return (s:gsub("~(.)", function(c)
+        local b = c:byte()
+        if b == 122 then return "\030"
+        elseif b == 123 then return "\127"
+        elseif b == 124 then return "\126"
+        elseif b == 125 then return "\94"
+        elseif b >= 64 and b <= 96 then return string.char(b - 64)
+        end
+        return ""
+    end))
 end
 
 -- ================= fresh-instance detection via creature GUIDs =================
@@ -1308,6 +1359,10 @@ tally:RegisterEvent("READY_CHECK_FINISHED")
 tally:RegisterEvent("GROUP_ROSTER_UPDATE")
 tally:RegisterEvent("CHAT_MSG_SYSTEM")
 tally:RegisterEvent("CHAT_MSG_ADDON")
+tally:RegisterEvent("CHAT_MSG_PARTY")
+tally:RegisterEvent("CHAT_MSG_PARTY_LEADER")
+tally:RegisterEvent("CHAT_MSG_RAID")
+tally:RegisterEvent("CHAT_MSG_RAID_LEADER")
 tally:RegisterEvent("PLAYER_XP_UPDATE")
 tally:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 tally:RegisterEvent("PLAYER_TARGET_CHANGED")
@@ -1358,6 +1413,7 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
             DIFF_RESET_PATTERN = "^" .. diffMsg:gsub("[%(%)%.%+%-%*%?%[%]%^%$]", "%%%0"):gsub("%%%%s", "(.+)") .. "$"
         end
         C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
+        C_ChatInfo.RegisterAddonMessagePrefix(NOVA_PREFIX)   -- listen for NIT/NWB reset relays
         if IsInGroup() then
             C_ChatInfo.SendAddonMessage(PREFIX, "HELLO|", IsInRaid() and "RAID" or "PARTY")
         end
@@ -1402,23 +1458,49 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
                 end
             end
         end
+    elseif event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER"
+            or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER" then
+        -- NIT announces "[NIT] <instance> has been reset..." in group chat.
+        -- Only the resetter's NIT posts this and only leaders can reset, so
+        -- the leader saying it is as trustworthy as an addon relay -- and it
+        -- works no matter what NIT version the leader runs.
+        local instance = (arg1 or ""):match("^%[NIT%] (.+) has been reset")
+        if instance then
+            local sender = Ambiguate(arg2 or "", "none")
+            if sender ~= UnitName("player") and SenderIsGroupLeader(sender) then
+                if db.debug then Print("debug: NIT chat line from leader " .. sender .. " - reset of " .. instance) end
+                OnInstanceReset(instance, true)
+            end
+        end
     elseif event == "CHAT_MSG_ADDON" then
-        if arg1 ~= PREFIX then return end
+        if arg1 ~= PREFIX and arg1 ~= NOVA_PREFIX then return end
         local sender = Ambiguate(arg4 or "", "none")
+        if sender == UnitName("player") then return end
+        if arg1 == NOVA_PREFIX then
+            -- reset relayed by NovaInstanceTracker / NovaWorldBuffs. Same trust
+            -- rule as our own relay: only the group leader can reset, so only
+            -- the leader's relay is believed.
+            local senderIsLeader = SenderIsGroupLeader(sender)
+            local msg = DecodeNovaMessage(arg2)
+            if db.debug then
+                Print(("debug: NIT comm from %s%s (%d bytes) -> %s"):format(
+                    sender, senderIsLeader and " (leader)" or " (not leader)",
+                    #(arg2 or ""), msg and ("'" .. msg .. "'") or "no decode"))
+            end
+            if not senderIsLeader then return end
+            local cmd, instance = (msg or ""):match("^(%S+) %S+ (.+)$")
+            if instance and (cmd == "instanceReset" or cmd == "instanceResetNoMsg"
+                    or cmd == "instanceResetOther") then
+                OnInstanceReset(instance, true)
+            end
+            return
+        end
         if db.debug then
             Print(("debug: addon msg from %s: %s"):format(sender, tostring(arg2):sub(1, 60)))
         end
-        if sender == UnitName("player") then return end
         local kind, payload = strsplit("|", arg2 or "")
         if kind == "RESET" and payload then
-            local senderIsLeader = false
-            for _, u in ipairs(GroupUnits()) do
-                if UnitName(u) == sender and UnitIsGroupLeader(u) then
-                    senderIsLeader = true
-                    break
-                end
-            end
-            if not senderIsLeader then return end
+            if not SenderIsGroupLeader(sender) then return end
             OnInstanceReset(payload, true)
         elseif kind == "STATE" then
             local size = 0

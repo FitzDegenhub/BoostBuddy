@@ -1,5 +1,18 @@
 # BoostBuddy Changelog
 
+## 1.0.8 — 2026-08-06
+
+- BoostBuddy now understands **NovaInstanceTracker and NovaWorldBuffs**: when
+  a group leader running either addon resets the instance, the run counts
+  instantly for everyone with BoostBuddy - nothing needed on the resetter's
+  side beyond their Nova addon. Both their addon-channel relay (current and
+  legacy formats) and their "[NIT] ... has been reset" group-chat line are
+  recognized, and reset claims are only ever believed from the group leader.
+- Friendlier messages: the routine undo link after automatic counts now reads
+  "undo available:" instead of the alarming "miscounted?", and counts that
+  land on first mob contact explain why ("the reset itself never reached
+  your addon").
+
 ## 1.0.7 — 2026-08-06
 
 - Fixed run counting when a package is activated **outside** the instance:
