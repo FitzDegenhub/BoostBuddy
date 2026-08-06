@@ -224,6 +224,32 @@ local function Engaged()
     return false
 end
 
+-- stats describe the CURRENT session: walk back from the newest run while
+-- completions are less than an hour apart (25 runs max). Yesterday's runs at
+-- a lower level shouldn't drag today's averages down.
+local function SessionStats()
+    local n = #cdb.runs
+    if n == 0 then return 0, 0, 0, 0, 0 end
+    local first = n
+    while first > 1 and (n - first + 1) < 25 do
+        local newer, older = cdb.runs[first], cdb.runs[first - 1]
+        if not newer.t or not older.t or (newer.t - older.t) > 3600 then break end
+        first = first - 1
+    end
+    local sum, cnt, dsum, dxp, dcnt = 0, 0, 0, 0, 0
+    for i = first, n do
+        local run = cdb.runs[i]
+        sum = sum + run.xp
+        cnt = cnt + 1
+        if run.dur and run.dur > 0 and run.dur < 1800 then
+            dsum = dsum + run.dur
+            dxp = dxp + run.xp
+            dcnt = dcnt + 1
+        end
+    end
+    return sum, cnt, dsum, dxp, dcnt
+end
+
 local RefreshUI -- forward declaration
 local runScroll = 0   -- window into the Previous Runs ledger (0 = newest)
 
@@ -301,17 +327,7 @@ local function Render()
                     if run.dur then line = line .. "  -  " .. FmtDurLong(run.dur) end
                     table.insert(lines, line)
                 end
-                local sum, cnt = 0, math.min(nRuns, 25)
-                local dsum, dxp, dcnt = 0, 0, 0
-                for i = nRuns - cnt + 1, nRuns do
-                    local run = cdb.runs[i]
-                    sum = sum + run.xp
-                    if run.dur and run.dur > 0 and run.dur < 1800 then
-                        dsum = dsum + run.dur
-                        dxp = dxp + run.xp
-                        dcnt = dcnt + 1
-                    end
-                end
+                local sum, cnt, dsum, dxp, dcnt = SessionStats()
                 local avg = sum / cnt
                 table.insert(lines, " ")
                 local avgLine = "|cff9292ffAvg:|r " .. FmtXP(avg) .. " XP"
@@ -862,23 +878,14 @@ RefreshUI = function()
         end
 
         y = y - 12
-        PlaceHeader("STATS")
+        PlaceHeader("STATS (this session)")
         local level, xp, xpMax = UnitLevel("player"), UnitXP("player") or 0, UnitXPMax("player") or 1
         local lrow = PlaceRow()
         lrow.name:SetWidth(290)
         lrow.name:SetText(GREY .. "level " .. level .. " - |r" .. FmtXP(xp) .. GREY .. " / |r" ..
             FmtXP(xpMax) .. GREY .. (" (%d%%)|r"):format(xp / xpMax * 100))
         if nRuns > 0 then
-            local sum, cnt = 0, math.min(nRuns, 25)
-            local dsum, dxp, dcnt = 0, 0, 0
-            for i = nRuns - cnt + 1, nRuns do
-                sum = sum + cdb.runs[i].xp
-                if cdb.runs[i].dur and cdb.runs[i].dur > 0 and cdb.runs[i].dur < 1800 then
-                    dsum = dsum + cdb.runs[i].dur
-                    dxp = dxp + cdb.runs[i].xp
-                    dcnt = dcnt + 1
-                end
-            end
+            local sum, cnt, dsum, dxp, dcnt = SessionStats()
             local avg = sum / cnt
             local togo = avg > 0 and math.ceil((xpMax - xp) / avg) or 0
             local r = PlaceRow()

@@ -1,5 +1,12 @@
 # BoostBuddy Changelog
 
+## 1.0.3 — 2026-08-06
+
+- Averages, pace, XP/hr, and the level projection are now **session-scoped**:
+  they cover the current sitting (runs completed less than an hour apart, up
+  to 25) instead of mixing in yesterday's lower-level runs. No more "average
+  lower than every run on screen".
+
 ## 1.0.2 — 2026-08-06
 
 - Averages, XP/hr, and the level projection now consider the last 25 runs
