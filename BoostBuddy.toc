@@ -1,0 +1,10 @@
+## Interface: 20506, 11509
+## Title: BoostBuddy
+## Notes: Boost run tracking for boosters AND boostees: packages, XP per run, ready alerts. /boost or /bb opens the window.
+## Author: Fitz
+## Version: 1.0.1
+## X-License: GPLv3
+## SavedVariables: BoostBuddyDB, BoostCounterDB
+## SavedVariablesPerCharacter: BoostBuddyCharDB
+
+BoostBuddy.lua
