@@ -1043,7 +1043,14 @@ end)
 ui.undoBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
 ui.undoBtn:SetSize(78, 22)
 ui.undoBtn:SetText("Undo last")
-ui.undoBtn:SetScript("OnClick", UndoLastCount)
+ui.undoBtn:SetScript("OnClick", function()
+    local preview = UndoPreview()
+    if not preview then
+        Print("nothing to undo")
+        return
+    end
+    StaticPopup_Show("BOOSTBUDDY_UNDO", "would become:  " .. preview)
+end)
 
 ui.resetBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
 ui.resetBtn:SetSize(110, 22)
@@ -1198,6 +1205,28 @@ StaticPopupDialogs["BOOSTBUDDY_EDIT_TOTAL"] = {
     whileDead = true,
     hideOnEscape = true,
 }
+
+StaticPopupDialogs["BOOSTBUDDY_UNDO"] = {
+    text = "Undo the last counted run for everyone?\n\n%s\n\nThis lowers each customer's count by 1 and announces it to the group. Re-add it with /boost count if needed.",
+    button1 = ACCEPT,
+    button2 = CANCEL,
+    OnAccept = function() UndoLastCount() end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+-- what the last count would revert to, shown in the confirm dialog
+local function UndoPreview()
+    if not db.lastCounted or #db.lastCounted == 0 then return nil end
+    local parts = {}
+    for _, name in ipairs(db.lastCounted) do
+        local c = db.customers[name]
+        if c then table.insert(parts, name .. " " .. math.max(c.used - 1, 0) .. "/" .. c.total) end
+    end
+    table.sort(parts)
+    return table.concat(parts, ", ")
+end
 
 local function ToggleUI()
     if ui:IsShown() then

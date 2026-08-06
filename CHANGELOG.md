@@ -1,5 +1,11 @@
 # BoostBuddy Changelog
 
+## 1.0.6 — 2026-08-06
+
+- The **Undo Last** button now asks for confirmation, showing exactly what
+  each customer's count would drop to before you commit. The `/boost undo`
+  command stays instant for those who prefer it.
+
 ## 1.0.5 — 2026-08-06
 
 - Overlay past runs are easier to read: run numbers are now a muted grey
