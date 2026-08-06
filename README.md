@@ -10,6 +10,9 @@ Counts runs on every reset, manages customers' paid packages, and shows boostees
 [![TBC Anniversary](https://img.shields.io/badge/WoW-TBC%20Anniversary-5db3e8?style=flat-square)](#installation)
 [![Classic Era](https://img.shields.io/badge/WoW-Classic%20Era-5db3e8?style=flat-square)](#installation)
 
+[![CurseForge](https://img.shields.io/badge/CurseForge-download-f16436?style=flat-square&logo=curseforge&logoColor=white)](https://www.curseforge.com/wow/addons/boost-buddy)
+[![Wago](https://img.shields.io/badge/Wago-download-c1272d?style=flat-square)](https://addons.wago.io/addons/boost-buddy)
+
 *Selling carry runs? Buying them? Someone always ends up tallying runs on a piece of paper, and someone always ends up arguing about the count.*
 
 BoostBuddy replaces the paper, the arguing, and the *"wait, was that 7 or 8?"* with automatic, tamper-evident tracking that both sides of the trade can see.
@@ -76,7 +79,7 @@ Works in **any dungeon or raid**. Nothing is hardcoded: the addon learns what yo
 
 ## Installation
 
-**Addon managers:** available on CurseForge and Wago — search *BoostBuddy*.
+**Addon managers:** [CurseForge](https://www.curseforge.com/wow/addons/boost-buddy) • [Wago](https://addons.wago.io/addons/boost-buddy)
 
 **Manual:** grab the zip from [Releases](https://github.com/FitzDegenhub/BoostBuddy/releases), extract the `BoostBuddy` folder into:
 
