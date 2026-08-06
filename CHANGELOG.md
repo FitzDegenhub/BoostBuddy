@@ -1,5 +1,11 @@
 # BoostBuddy Changelog
 
+## 1.0.5 — 2026-08-06
+
+- Overlay past runs are easier to read: run numbers are now a muted grey
+  `#12` prefix and XP values are gold, so double-digit run numbers can no
+  longer blur into the XP amount.
+
 ## 1.0.4 — 2026-08-06
 
 - Stats (average, pace, XP/hr, level projection) now reflect your **last 5

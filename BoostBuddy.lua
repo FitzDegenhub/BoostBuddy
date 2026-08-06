@@ -312,7 +312,7 @@ local function Render()
                 if db.lastInstance then
                     table.insert(lines, "  " .. db.lastInstance)
                 end
-                local line = "  " .. FmtXP(cdb.runXP or 0) .. " XP"
+                local line = "  " .. GOLD .. FmtXP(cdb.runXP or 0) .. " XP|r"
                 if cdb.runStart then
                     line = line .. "  -  " .. FmtDurLong(time() - cdb.runStart)
                 end
@@ -323,7 +323,7 @@ local function Render()
                 table.insert(lines, "|cffb76b45Past Runs|r")
                 for i = nRuns, math.max(1, nRuns - 4), -1 do
                     local run = cdb.runs[i]
-                    local line = ("  %d. %s XP"):format(i, FmtXP(run.xp))
+                    local line = ("  %s#%d|r  %s%s XP|r"):format(GREY, i, GOLD, FmtXP(run.xp))
                     if run.dur then line = line .. "  -  " .. FmtDurLong(run.dur) end
                     table.insert(lines, line)
                 end
