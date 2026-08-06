@@ -301,7 +301,7 @@ local function Render()
                     if run.dur then line = line .. "  -  " .. FmtDurLong(run.dur) end
                     table.insert(lines, line)
                 end
-                local sum, cnt = 0, math.min(nRuns, 10)
+                local sum, cnt = 0, math.min(nRuns, 25)
                 local dsum, dxp, dcnt = 0, 0, 0
                 for i = nRuns - cnt + 1, nRuns do
                     local run = cdb.runs[i]
@@ -483,7 +483,7 @@ local function BankRunXP()
             dur = dur,
             t = time(),
         })
-        while #cdb.runs > 50 do table.remove(cdb.runs, 1) end
+        while #cdb.runs > 100 do table.remove(cdb.runs, 1) end
     end
     cdb.runStart = nil
     cdb.runXP = 0
@@ -869,7 +869,7 @@ RefreshUI = function()
         lrow.name:SetText(GREY .. "level " .. level .. " - |r" .. FmtXP(xp) .. GREY .. " / |r" ..
             FmtXP(xpMax) .. GREY .. (" (%d%%)|r"):format(xp / xpMax * 100))
         if nRuns > 0 then
-            local sum, cnt = 0, math.min(nRuns, 10)
+            local sum, cnt = 0, math.min(nRuns, 25)
             local dsum, dxp, dcnt = 0, 0, 0
             for i = nRuns - cnt + 1, nRuns do
                 sum = sum + cdb.runs[i].xp

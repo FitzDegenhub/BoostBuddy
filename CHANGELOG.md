@@ -1,5 +1,11 @@
 # BoostBuddy Changelog
 
+## 1.0.2 — 2026-08-06
+
+- Averages, XP/hr, and the level projection now consider the last 25 runs
+  instead of 10, so full 15-20 run sessions are properly represented.
+- Run history storage doubled to the last 100 runs.
+
 ## 1.0.1 — 2026-08-06
 
 - **Classic Era support** — one addon for TBC Anniversary and Classic Era; the
