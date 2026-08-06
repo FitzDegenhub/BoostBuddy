@@ -1,5 +1,11 @@
 # BoostBuddy Changelog
 
+## 1.0.4 — 2026-08-06
+
+- Stats (average, pace, XP/hr, level projection) now reflect your **last 5
+  runs**, matching the runs shown on the overlay. XP rates change as you level
+  mid-session, so a long lookback made the average lag reality.
+
 ## 1.0.3 — 2026-08-06
 
 - Averages, pace, XP/hr, and the level projection are now **session-scoped**:

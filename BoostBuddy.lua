@@ -224,14 +224,14 @@ local function Engaged()
     return false
 end
 
--- stats describe the CURRENT session: walk back from the newest run while
--- completions are less than an hour apart (25 runs max). Yesterday's runs at
--- a lower level shouldn't drag today's averages down.
+-- stats show your CURRENT form: the last 5 runs (the same ones the overlay
+-- lists), never reaching across a break of an hour or more. XP rates change
+-- as you level, so older runs would only muddy the numbers you act on.
 local function SessionStats()
     local n = #cdb.runs
     if n == 0 then return 0, 0, 0, 0, 0 end
     local first = n
-    while first > 1 and (n - first + 1) < 25 do
+    while first > 1 and (n - first + 1) < 5 do
         local newer, older = cdb.runs[first], cdb.runs[first - 1]
         if not newer.t or not older.t or (newer.t - older.t) > 3600 then break end
         first = first - 1
@@ -878,7 +878,7 @@ RefreshUI = function()
         end
 
         y = y - 12
-        PlaceHeader("STATS (this session)")
+        PlaceHeader("STATS (last 5 runs)")
         local level, xp, xpMax = UnitLevel("player"), UnitXP("player") or 0, UnitXPMax("player") or 1
         local lrow = PlaceRow()
         lrow.name:SetWidth(290)
