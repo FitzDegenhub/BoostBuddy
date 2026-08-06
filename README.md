@@ -5,7 +5,7 @@
 **Automatic dungeon boost run tracking for WoW Classic.**
 Counts runs on every reset, manages customers' paid packages, and shows boostees their XP per run — with zero setup.
 
-[![Version](https://img.shields.io/badge/version-1.0.1-7dc243?style=flat-square)](https://github.com/FitzDegenhub/BoostBuddy/releases)
+[![Version](https://img.shields.io/github/v/release/FitzDegenhub/BoostBuddy?style=flat-square&color=7dc243&label=version)](https://github.com/FitzDegenhub/BoostBuddy/releases)
 [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-e8c860?style=flat-square)](LICENSE)
 [![TBC Anniversary](https://img.shields.io/badge/WoW-TBC%20Anniversary-5db3e8?style=flat-square)](#installation)
 [![Classic Era](https://img.shields.io/badge/WoW-Classic%20Era-5db3e8?style=flat-square)](#installation)
