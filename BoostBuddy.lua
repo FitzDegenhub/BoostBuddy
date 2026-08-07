@@ -445,9 +445,10 @@ local function CountRun(source)
         local announcer = (source == "manual") or IAmAnnouncer()
         local function LineFor(name)
             local c = db.customers[name]
-            local text = name .. " " .. c.used .. "/" .. c.total
-            if c.used >= c.total then text = text .. " (final run starting now!)" end
-            return text
+            if c.used >= c.total then
+                return name .. " - FINAL Run " .. c.used .. "/" .. c.total .. " Begins Now!"
+            end
+            return name .. " - Run " .. c.used .. "/" .. c.total
         end
         if source == "manual" then
             AnnounceAlways("MANUAL run count by " .. UnitName("player"))
@@ -1613,8 +1614,9 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
                     Announce("New Instance Run Detected")
                     for _, name in ipairs(started) do
                         local c = db.customers[name]
-                        Announce(name .. " " .. c.used .. "/" .. c.total ..
-                            (c.used >= c.total and " (final run starting now!)" or ""))
+                        Announce(c.used >= c.total
+                            and (name .. " - FINAL Run " .. c.used .. "/" .. c.total .. " Begins Now!")
+                            or (name .. " - Run " .. c.used .. "/" .. c.total))
                     end
                 end
                 BroadcastState()

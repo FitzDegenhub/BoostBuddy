@@ -1,5 +1,13 @@
 # BoostBuddy Changelog
 
+## 1.0.10 — 2026-08-06
+
+- Count announcements now read "Name - Run 3/10", making it obvious the
+  number is the run currently underway, not runs already consumed.
+- The last run of a package announces loudly and unmistakably:
+  "Name - FINAL Run 10/10 Begins Now!" - the run just starting is still
+  owed, and it is the only line in the addon that shouts.
+
 ## 1.0.9 — 2026-08-06
 
 - The last-run announcement now reads "(final run starting now!)" instead of
