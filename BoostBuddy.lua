@@ -76,6 +76,14 @@ local function FmtDurLong(sec)
     return ("%dm %ds"):format(math.floor(sec / 60), math.floor(sec % 60))
 end
 
+local function FmtEta(sec)
+    if not sec then return "" end
+    if sec >= 3600 then
+        return ("%dh %02dm"):format(math.floor(sec / 3600), math.floor(sec % 3600 / 60))
+    end
+    return ("%dm"):format(math.max(1, math.floor(sec / 60 + 0.5)))
+end
+
 local function Announce(msg)
     if db.announce and IsInGroup() then
         SendChatMessage("[BoostBuddy] " .. msg, IsInRaid() and "RAID" or "PARTY")
@@ -268,6 +276,25 @@ local function SessionStats()
     return sum, cnt, dsum, dxp, dcnt
 end
 
+-- true wall-clock pace per run: the gap between consecutive run completions
+-- this session. Unlike instance duration, this includes the reset/regroup
+-- downtime between runs, so ETAs reflect how boosting actually flows.
+local function AvgCycleSeconds()
+    local n = #cdb.runs
+    local gsum, gcnt = 0, 0
+    for i = n, math.max(2, n - 4), -1 do
+        local newer, older = cdb.runs[i], cdb.runs[i - 1]
+        local gap = (newer.t and older.t) and (newer.t - older.t) or nil
+        if not gap or gap > 3600 then break end
+        gsum = gsum + gap
+        gcnt = gcnt + 1
+    end
+    if gcnt > 0 then return gsum / gcnt end
+    -- single run so far: fall back to its instance duration
+    local _, _, dsum, _, dcnt = SessionStats()
+    if dcnt > 0 then return dsum / dcnt end
+end
+
 local RefreshUI -- forward declaration
 local runScroll = 0   -- window into the Previous Runs ledger (0 = newest)
 
@@ -356,7 +383,12 @@ local function Render()
                 end
                 local remaining = (UnitXPMax("player") or 0) - (UnitXP("player") or 0)
                 local togo = avg > 0 and math.ceil(remaining / avg) or 0
-                table.insert(lines, "|cff9292ffLevel up:|r ~" .. togo .. " run" .. (togo == 1 and "" or "s"))
+                local lvlLine = "|cff9292ffLevel up:|r ~" .. togo .. " run" .. (togo == 1 and "" or "s")
+                local cycle = AvgCycleSeconds()
+                if togo > 0 and cycle then
+                    lvlLine = lvlLine .. GREY .. "  (~" .. FmtEta(togo * cycle) .. ")|r"
+                end
+                table.insert(lines, lvlLine)
             end
             if not hasCurrent and nRuns == 0 then
                 table.insert(lines, GREY .. "Waiting for dungeon...|r")
@@ -956,7 +988,9 @@ RefreshUI = function()
             r.name:SetText(text .. "|r")
             local r2 = PlaceRow()
             r2.name:SetWidth(250)
-            r2.name:SetText(GREEN .. ("level %d in ~%d run%s|r"):format(level + 1, togo, togo == 1 and "" or "s"))
+            local cycle = AvgCycleSeconds()
+            local eta = (togo > 0 and cycle) and (" - about " .. FmtEta(togo * cycle)) or ""
+            r2.name:SetText(GREEN .. ("level %d in ~%d run%s%s|r"):format(level + 1, togo, togo == 1 and "" or "s", eta))
             local btn = r2.buttons[1]
             btn:SetText("X")
             btn:SetWidth(26)

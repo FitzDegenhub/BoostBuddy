@@ -1,5 +1,13 @@
 # BoostBuddy Changelog
 
+## 1.0.11 — 2026-08-07
+
+- **Level-up ETA**: the "level up in ~N runs" projection now also shows the
+  estimated time (for example "~15 runs (~3h 22m)"), on both the overlay and
+  the stats window. The pace comes from the wall-clock time between your
+  recent run completions - including reset and regroup downtime - so the ETA
+  reflects how boosting actually flows, not just time spent inside.
+
 ## 1.0.10 — 2026-08-06
 
 - Count announcements now read "Name - Run 3/10", making it obvious the
