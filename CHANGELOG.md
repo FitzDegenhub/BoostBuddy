@@ -1,5 +1,33 @@
 # BoostBuddy Changelog
 
+## 1.1.0 — 2026-08-08 — The Money Update
+
+BoostBuddy now answers the third question: how many runs, from whom - and
+**for how much**.
+
+- **Automatic trade capture.** Completed trades are logged (cancelled ones
+  are not) and tagged to the crew you're running with - paying any member
+  of the crew lands on the right session. Rebuys simply stack: 150g now and
+  150g later show as 300g on the one session.
+- **The Ledger prices your sessions.** New GOLD column with per-day and
+  lifetime totals ("...spent" as a customer, "...earned" as a booster).
+  Expand a session and every run shows its share of the cost. Click the
+  GOLD cell to enter or adjust what you paid; click the NOTE cell to write
+  or edit crew notes (all notes are private to you - nothing is ever
+  broadcast).
+- **Boosters get their books.** Roster customers show red "unpaid" until
+  their trade lands (or `/boost paid Name 300` sets it manually), with
+  payment status on hover. Right-click a customer row to keep a private
+  note on them; your notes greet you in chat whenever a noted player joins
+  your group. When a count completes every package, the addon announces
+  the session is complete.
+- **Rested advisor.** The overlay shows roughly how many boosted runs your
+  rested bonus still covers - rested doubles the kill XP you're paying for.
+- **`/boost spent 280`** records gold paid outside a trade window (add a
+  crew name to attribute it when you're not grouped).
+- The hourly instance counter now only appears as a warning at 4/5 and 5/5
+  instead of sitting in the title permanently.
+
 ## 1.0.12 — 2026-08-08
 
 **The Ledger.** A new History window (button next to Overlay) shows your runs

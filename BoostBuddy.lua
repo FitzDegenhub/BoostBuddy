@@ -61,6 +61,15 @@ end
 -- ================================================================= helpers ==
 local function Print(msg) print(GREEN .. "[BoostBuddy]|r " .. msg) end
 
+local function FmtGold(copper)
+    if not copper or copper == 0 then return "" end
+    local g = copper / 10000
+    if g >= 1 then
+        return ("%dg"):format(math.floor(g + 0.5))
+    end
+    return ("%ds"):format(math.floor(copper / 100 + 0.5))
+end
+
 local function FmtXP(n)
     if n >= 1000 then return ("%.1fk"):format(n / 1000) end
     return tostring(math.floor(n))
@@ -169,20 +178,30 @@ end
 -- join a group and SURVIVES leadership handoffs (the seller often passes
 -- lead to a booster mid-package). Only actually leaving the group ends the
 -- crew. A short grace window covers runs banked just after a disband.
+local notedSeen = {}   -- names whose note was already surfaced this session
+
 local function UpdateCrew()
     if IsInGroup() then
         if not cdb.crewLeader then
             local name, class = GroupLeaderName()
             if name then
                 cdb.crewLeader, cdb.crewClass = name, class
-                -- surface your own crew reputation right when it matters
-                local note = db.crewNotes and db.crewNotes[name]
-                if note then
-                    Print("crew note for " .. ClassColorName(name, class) .. ": \"" .. note .. "\"")
+            end
+        end
+        -- surface your saved notes the moment a noted player is in the
+        -- group - leader, booster or customer alike, once per session
+        if db.crewNotes then
+            for _, u in ipairs(GroupUnits()) do
+                local n = UnitName(u)
+                if n and n ~= UnitName("player") and db.crewNotes[n] and not notedSeen[n] then
+                    notedSeen[n] = true
+                    local _, cls = UnitClass(u)
+                    Print("note for " .. ClassColorName(n, cls) .. ": \"" .. db.crewNotes[n] .. "\"")
                 end
             end
         end
     elseif cdb.crewLeader then
+        notedSeen = {}
         cdb.crewGrace = { name = cdb.crewLeader, class = cdb.crewClass, t = time() }
         cdb.crewLeader, cdb.crewClass = nil, nil
         -- leaving the group ends the session: retire FINISHED packages right
@@ -394,6 +413,22 @@ local function BuildSessions()
     return sessions
 end
 
+-- net gold moved during a session: positive = you paid the crew (customer),
+-- negative = the crew paid you (booster earnings). Trades are tagged with
+-- the crew label at trade time and matched to the session's time window.
+local function SessionMoney(s)
+    if not cdb.trades or not s.firstT then return 0 end
+    local net = 0
+    for _, tr in ipairs(cdb.trades) do
+        if tr.crew and tr.crew == s.leader
+                and tr.t >= (s.firstT - 3600)
+                and tr.t <= ((s.lastT or s.firstT) + 1800) then
+            net = net + (tr.give or 0) - (tr.get or 0)
+        end
+    end
+    return net
+end
+
 -- instances entered across the whole account in the trailing hour, plus
 -- seconds until the oldest one ages out (the 5/hour cap is account-wide)
 local function InstanceUses()
@@ -489,6 +524,13 @@ local function Render()
                 table.insert(lines, avgLine)
                 if dcnt > 0 then
                     table.insert(lines, "|cff9292ffXP/hr:|r " .. FmtXP(dxp / dsum * 3600))
+                end
+                local rested = GetXPExhaustion() or 0
+                if rested > 0 and avg > 0 then
+                    -- rested doubles kill XP; the pool drains by the bonus,
+                    -- which is roughly half of each boosted run's XP
+                    local rrs = math.floor(rested / (avg / 2) + 0.5)
+                    table.insert(lines, "|cff9292ffRested:|r ~" .. rrs .. " boosted run" .. (rrs == 1 and "" or "s") .. " left")
                 end
                 local remaining = (UnitXPMax("player") or 0) - (UnitXP("player") or 0)
                 local togo = avg > 0 and math.ceil(remaining / avg) or 0
@@ -614,6 +656,17 @@ local function CountRun(source)
                 cdb.finalRunActive = true
                 PlaySound(8959, "Master")
                 break
+            end
+        end
+        -- the professional goodbye: when this count completes every tracked
+        -- package, say so once (announcer only, real counts only)
+        if source ~= "manual" and announcer then
+            local anyLeft = false
+            for _, c in pairs(db.customers) do
+                if c.used < c.total then anyLeft = true break end
+            end
+            if not anyLeft and cdb.role == "booster" then
+                Announce("All packages complete after this run - pleasure boosting with you!")
             end
         end
         if source ~= "manual" then
@@ -889,13 +942,14 @@ local LCOLS = {
     { x = 374, w = 64 },    -- avg
     { x = 440, w = 62 },    -- length
     { x = 504, w = 40 },    -- level
-    { x = 546, w = 176 },   -- note
+    { x = 546, w = 60 },    -- gold
+    { x = 610, w = 160 },   -- note
 }
 
 local function GetLedgerRow(i)
     if ledgerRows[i] then return ledgerRows[i] end
     local row = CreateFrame("Button", nil, ledger.content)
-    row:SetSize(744, 20)
+    row:SetSize(792, 20)
     row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     row.bg = row:CreateTexture(nil, "BACKGROUND")
     row.bg:SetAllPoints()
@@ -918,6 +972,17 @@ local function GetLedgerRow(i)
     row.del.label:SetText("|cffe05c4cx|r")
     row.del:SetScript("OnEnter", function(b) b.label:SetText("|cffff2020X|r") end)
     row.del:SetScript("OnLeave", function(b) b.label:SetText("|cffe05c4cx|r") end)
+    -- the GOLD column itself is the click target for entering gold
+    row.pay = CreateFrame("Button", nil, row)
+    row.pay:SetSize(60, 20)
+    row.pay:SetPoint("LEFT", 544, 0)
+    row.pay:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
+    row.pay:GetHighlightTexture():SetVertexColor(1, 0.9, 0.5, 0.10)
+    row.noteBtn = CreateFrame("Button", nil, row)
+    row.noteBtn:SetSize(160, 20)
+    row.noteBtn:SetPoint("LEFT", 608, 0)
+    row.noteBtn:SetHighlightTexture("Interface\\Buttons\\WHITE8x8")
+    row.noteBtn:GetHighlightTexture():SetVertexColor(1, 0.9, 0.5, 0.10)
     ledgerRows[i] = row
     return row
 end
@@ -947,6 +1012,14 @@ local function RenderLedger()
         for _, fs in ipairs(row.cols) do fs:SetText("") end
         row.del:Hide()
         row.del:SetScript("OnClick", nil)
+        row.pay:Hide()
+        row.pay:SetScript("OnClick", nil)
+        row.pay:SetScript("OnEnter", nil)
+        row.pay:SetScript("OnLeave", nil)
+        row.noteBtn:Hide()
+        row.noteBtn:SetScript("OnClick", nil)
+        row.noteBtn:SetScript("OnEnter", nil)
+        row.noteBtn:SetScript("OnLeave", nil)
         row:SetScript("OnClick", nil)
         row:SetScript("OnEnter", nil)
         row:SetScript("OnLeave", nil)
@@ -965,6 +1038,13 @@ local function RenderLedger()
         r.cols[2]:SetText(GREY .. #d.sessions .. " session" .. (#d.sessions == 1 and "" or "s") .. "|r")
         r.cols[3]:SetText(GREY .. "x|r" .. d.runs)
         r.cols[4]:SetText(GOLD .. FmtXP(d.xp) .. "|r")
+        local dayMoney = 0
+        for _, ds in ipairs(d.sessions) do dayMoney = dayMoney + SessionMoney(ds) end
+        if dayMoney > 0 then
+            r.cols[8]:SetText(GOLD .. FmtGold(dayMoney) .. "|r")
+        elseif dayMoney < 0 then
+            r.cols[8]:SetText(GREEN .. "+" .. FmtGold(-dayMoney) .. "|r")
+        end
         r:SetScript("OnClick", function()
             ledgerOpenDay[day] = not open
             RenderLedger()
@@ -998,7 +1078,13 @@ local function RenderLedger()
                 local note = db.crewNotes and db.crewNotes[s.leader]
                 sr.cols[2]:SetText(ClassColorName(DisplayName(s.leader), lc) ..
                     (inst ~= "" and (GREY .. " - " .. inst .. "|r") or ""))
-                sr.cols[8]:SetText(note and (GOLD .. note .. "|r") or "")
+                local money = SessionMoney(s)
+                if money > 0 then
+                    sr.cols[8]:SetText(GOLD .. FmtGold(money) .. "|r")
+                elseif money < 0 then
+                    sr.cols[8]:SetText(GREEN .. "+" .. FmtGold(-money) .. "|r")
+                end
+                sr.cols[9]:SetText(note and (GOLD .. note .. "|r") or "")
                 sr:SetScript("OnEnter", function(self)
                     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                     if note then
@@ -1024,6 +1110,48 @@ local function RenderLedger()
                     lvltext = GREY .. (s.lvl1 or s.lvl0) .. "|r"
                 end
                 sr.cols[7]:SetText(lvltext)
+                sr.pay:SetScript("OnClick", function()
+                    if s.leader == "?" then
+                        Print("no crew was recorded for that session")
+                        return
+                    end
+                    StaticPopup_Show("BOOSTBUDDY_SESSION_GOLD", DisplayName(s.leader), nil,
+                        { leader = s.leader, lastT = s.lastT or s.firstT, current = money })
+                end)
+                sr.pay:SetScript("OnEnter", function(self)
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    if money > 0 then
+                        GameTooltip:SetText(FmtGold(money) .. " paid", 1, 0.82, 0)
+                        GameTooltip:AddLine(FmtGold(money / s.runs) .. " per run", 1, 1, 1)
+                        GameTooltip:AddLine("click to adjust", 0.6, 0.6, 0.6)
+                    else
+                        GameTooltip:SetText("no gold recorded", 0.6, 0.6, 0.6)
+                        GameTooltip:AddLine("click to enter what you paid", 0.6, 0.6, 0.6)
+                    end
+                    GameTooltip:Show()
+                end)
+                sr.pay:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                sr.pay:Show()
+                sr.noteBtn:SetScript("OnClick", function()
+                    if s.leader ~= "?" then
+                        StaticPopup_Show("BOOSTBUDDY_CREW_NOTE", DisplayName(s.leader), nil, s.leader)
+                    else
+                        Print("no crew was recorded for that session")
+                    end
+                end)
+                sr.noteBtn:SetScript("OnEnter", function(self)
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    if note then
+                        GameTooltip:SetText(note, 1, 1, 1, 1, true)
+                        GameTooltip:AddLine("click to edit", 0.6, 0.6, 0.6)
+                    else
+                        GameTooltip:SetText("no note", 0.6, 0.6, 0.6)
+                        GameTooltip:AddLine("click to write one about this crew", 0.6, 0.6, 0.6)
+                    end
+                    GameTooltip:Show()
+                end)
+                sr.noteBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                sr.noteBtn:Show()
                 sr.del:SetScript("OnClick", function()
                     local idxs = {}
                     for _, ri in ipairs(s.runIdxs or {}) do table.insert(idxs, ri) end
@@ -1057,6 +1185,9 @@ local function RenderLedger()
                             rr.cols[2]:SetText(GREY .. (run.t and date("%H:%M", run.t) or "") .. "|r")
                             rr.cols[4]:SetText(GREY .. FmtXP(run.xp) .. "|r")
                             rr.cols[6]:SetText(GREY .. (run.dur and FmtDur(run.dur) or "") .. "|r")
+                            if money > 0 then
+                                rr.cols[8]:SetText(GREY .. FmtGold(money / s.runs) .. "|r")
+                            end
                         end
                     end
                 end
@@ -1070,16 +1201,26 @@ local function RenderLedger()
     end
     for i = idx + 1, #ledgerRows do ledgerRows[i]:Hide() end
     ledger.content:SetHeight(math.max(1, -yy))
-    local totalRuns, totalXP = 0, 0
-    for _, s in ipairs(sessions) do totalRuns = totalRuns + s.runs totalXP = totalXP + s.xp end
+    local totalRuns, totalXP, totalMoney = 0, 0, 0
+    for _, s in ipairs(sessions) do
+        totalRuns = totalRuns + s.runs
+        totalXP = totalXP + s.xp
+        totalMoney = totalMoney + SessionMoney(s)
+    end
+    local moneyText = ""
+    if totalMoney > 0 then
+        moneyText = GREY .. " - |r" .. GOLD .. FmtGold(totalMoney) .. " spent|r"
+    elseif totalMoney < 0 then
+        moneyText = GREY .. " - |r" .. GREEN .. FmtGold(-totalMoney) .. " earned|r"
+    end
     ledger.totals:SetText(GREY .. #sessions .. " sessions - " .. totalRuns .. " runs - |r" ..
-        GOLD .. FmtXP(totalXP) .. " XP|r")
+        GOLD .. FmtXP(totalXP) .. " XP|r" .. moneyText)
     ledgerBuiltFor = #cdb.runs
 end
 
 local function BuildLedger()
     ledger = CreateFrame("Frame", "BoostBuddyLedger", UIParent, "BackdropTemplate")
-    ledger:SetSize(790, 400)
+    ledger:SetSize(838, 400)
     if db.ledgerPos then
         ledger:SetPoint(db.ledgerPos[1], UIParent, db.ledgerPos[2], db.ledgerPos[3], db.ledgerPos[4])
     else
@@ -1118,7 +1259,7 @@ local function BuildLedger()
     lclose:SetPoint("TOPRIGHT", 2, 2)
     lclose:SetScript("OnClick", function() ledger:Hide() end)
 
-    local heads = { "TIME", "CREW - INSTANCE", "RUNS", "XP", "AVG", "LENGTH", "LVL", "NOTE" }
+    local heads = { "TIME", "CREW - INSTANCE", "RUNS", "XP", "AVG", "LENGTH", "LVL", "GOLD", "NOTE" }
     for c, def in ipairs(LCOLS) do
         local fs = ledger:CreateFontString(nil, "OVERLAY")
         fs:SetFont(STANDARD_TEXT_FONT, 10)
@@ -1132,7 +1273,7 @@ local function BuildLedger()
     scroll:SetPoint("TOPLEFT", 8, -50)
     scroll:SetPoint("BOTTOMRIGHT", -30, 30)
     local content = CreateFrame("Frame", nil, scroll)
-    content:SetSize(744, 1)
+    content:SetSize(792, 1)
     scroll:SetScrollChild(content)
     ledger.content = content
 
@@ -1254,8 +1395,9 @@ RefreshUI = function()
     local role = cdb.role
     local uses, nextFree = InstanceUses()
     local lockText = ""
-    if uses > 0 then
-        local color = uses >= 5 and "|cffe05c4c" or GREY
+    -- the hourly instance cap is invisible until you're about to hit it
+    if uses >= 4 then
+        local color = uses >= 5 and "|cffe05c4c" or GOLD
         lockText = color .. "   instances: " .. uses .. "/5"
         if uses >= 5 then lockText = lockText .. " - next in " .. math.max(1, math.ceil(nextFree / 60)) .. "m" end
         lockText = lockText .. "|r"
@@ -1308,6 +1450,10 @@ RefreshUI = function()
         for _, b in ipairs(row.buttons) do b:Hide() end
         row.name:SetTextColor(0.93, 0.9, 0.96)
         row.name:SetWidth(150)
+        row:EnableMouse(false)
+        row:SetScript("OnMouseUp", nil)
+        row:SetScript("OnEnter", nil)
+        row:SetScript("OnLeave", nil)
         row:Show()
         y = y - 23
         return row
@@ -1509,10 +1655,37 @@ RefreshUI = function()
         local c = db.customers[name]
         local row = PlaceRow()
         local done = c.used >= c.total
-        row.name:SetText(ClassColorName(DisplayName(name), c.class) .. "  " .. (done and GREEN or GOLD) .. c.used .. "/" .. c.total .. "|r" ..
+        local paidText
+        if c.paid and c.paid > 0 then
+            paidText = GREY .. " " .. FmtGold(c.paid) .. "|r"
+        else
+            paidText = " |cffe05c4cunpaid|r"
+        end
+        local rnote = db.crewNotes and db.crewNotes[name]
+        row.name:SetText(ClassColorName(DisplayName(name), c.class) ..
+            (rnote and (GOLD .. "*|r") or "") ..
+            "  " .. (done and GREEN or GOLD) .. c.used .. "/" .. c.total .. "|r" ..
+            paidText ..
             (done and (GREEN .. " (Last Run)|r") or ""))
         row.name:SetTextColor(1, 1, 1)
         row.name:SetWidth(150)
+        -- right-click: note about this customer; hover: read it
+        row:EnableMouse(true)
+        row:SetScript("OnMouseUp", function(_, btn)
+            if btn == "RightButton" then
+                StaticPopup_Show("BOOSTBUDDY_CREW_NOTE", name, nil, name)
+            end
+        end)
+        row:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(DisplayName(name), 1, 0.82, 0)
+            if rnote then GameTooltip:AddLine(rnote, 1, 1, 1, true) GameTooltip:AddLine(" ") end
+            GameTooltip:AddLine("paid: " .. ((c.paid and c.paid > 0) and FmtGold(c.paid) or "nothing yet") ..
+                "  (/boost paid " .. name .. " <gold> to set)", 0.6, 0.6, 0.6)
+            GameTooltip:AddLine("right-click to " .. (rnote and "edit" or "add") .. " a note", 0.6, 0.6, 0.6)
+            GameTooltip:Show()
+        end)
+        row:SetScript("OnLeave", function() GameTooltip:Hide() end)
         local defs = {
             { "X",  "remove " .. name, function()
                 local dialog = StaticPopup_Show("BOOSTBUDDY_REMOVE", name,
@@ -1635,6 +1808,52 @@ StaticPopupDialogs["BOOSTBUDDY_REMOVE"] = {
         BroadcastState()
         Render()
     end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["BOOSTBUDDY_SESSION_GOLD"] = {
+    text = "Total gold paid to %s for this session:\n\n(enter the full amount - the ledger adjusts itself; 0 clears it)",
+    button1 = SAVE,
+    button2 = CANCEL,
+    hasEditBox = true,
+    editBoxWidth = 120,
+    maxLetters = 8,
+    OnShow = function(self)
+        local eb = PopupEditBox(self)
+        if eb then
+            local cur = self.data and self.data.current or 0
+            eb:SetText(cur > 0 and tostring(math.floor(cur / 10000 + 0.5)) or "")
+            eb:HighlightText()
+        end
+    end,
+    OnAccept = function(self)
+        local d = self.data
+        if not d or not cdb then return end
+        local eb = PopupEditBox(self)
+        local entered = math.floor((tonumber(eb and eb:GetText() or "") or 0) * 10000)
+        local delta = entered - (d.current or 0)
+        if delta == 0 then return end
+        cdb.trades = cdb.trades or {}
+        table.insert(cdb.trades, {
+            t = d.lastT or time(),
+            who = "(manual)",
+            give = delta > 0 and delta or 0,
+            get = delta < 0 and -delta or 0,
+            crew = d.leader,
+        })
+        while #cdb.trades > 300 do table.remove(cdb.trades, 1) end
+        Print(d.leader .. "'s session set to " .. (entered > 0 and FmtGold(entered) or "no gold") .. " paid")
+        Render()
+        RefreshLedger()
+    end,
+    EditBoxOnEnterPressed = function(self)
+        local parent = self:GetParent()
+        StaticPopupDialogs["BOOSTBUDDY_SESSION_GOLD"].OnAccept(parent)
+        parent:Hide()
+    end,
+    EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
     timeout = 0,
     whileDead = true,
     hideOnEscape = true,
@@ -1905,7 +2124,67 @@ mmb:SetScript("OnLeave", function() GameTooltip:Hide() end)
 BoostBuddyUpdateMinimapPos = UpdateMinimapPos
 
 -- ================================================================= events ==
+-- ========================================================= trade capture ==
+-- Gold changing hands is recorded and tagged with the current crew, so the
+-- Ledger can price sessions and the roster knows who has paid. Commit only
+-- on the "Trade complete." system message; a cancelled trade records nothing.
+local tradePartner, tradePartnerClass
+local tradeGive, tradeGet = 0, 0
+local tradePending
+
+local function TradeEvent(event, arg1, arg2)
+    if event == "TRADE_SHOW" then
+        tradePartner = UnitName("NPC")
+        tradePartnerClass = tradePartner and select(2, UnitClass("NPC")) or nil
+        tradeGive, tradeGet = 0, 0
+        tradePending = nil
+    elseif event == "TRADE_MONEY_CHANGED" or event == "TRADE_ACCEPT_UPDATE" then
+        tradeGive = GetPlayerTradeMoney() or tradeGive
+        tradeGet = GetTargetTradeMoney() or tradeGet
+    elseif event == "TRADE_CLOSED" then
+        if tradePartner and (tradeGive > 0 or tradeGet > 0) then
+            tradePending = { who = tradePartner, class = tradePartnerClass,
+                give = tradeGive, get = tradeGet, t = time() }
+        end
+        tradePartner = nil
+    elseif event == "UI_INFO_MESSAGE" then
+        local msg = arg2 or arg1
+        if msg == ERR_TRADE_COMPLETE and tradePending and (time() - tradePending.t) < 10 then
+            local p = tradePending
+            tradePending = nil
+            cdb.trades = cdb.trades or {}
+            local crew = cdb.crewLeader
+            if not crew and cdb.crewGrace and (time() - (cdb.crewGrace.t or 0)) < 900 then
+                crew = cdb.crewGrace.name
+            end
+            table.insert(cdb.trades, { t = time(), who = p.who, class = p.class,
+                give = p.give, get = p.get, crew = crew })
+            while #cdb.trades > 300 do table.remove(cdb.trades, 1) end
+            if p.give > 0 then
+                Print("gave " .. FmtGold(p.give) .. " to " .. ClassColorName(p.who, p.class) ..
+                    (crew and (GREY .. " - logged to " .. crew .. "'s session|r") or ""))
+            end
+            if p.get > 0 then
+                Print("received " .. FmtGold(p.get) .. " from " .. ClassColorName(p.who, p.class))
+                local c = db.customers[p.who]
+                if c then
+                    c.paid = (c.paid or 0) + p.get
+                end
+            end
+            Render()
+            RefreshLedger()
+        elseif msg == ERR_TRADE_CANCELLED then
+            tradePending = nil
+        end
+    end
+end
+
 tally:RegisterEvent("ADDON_LOADED")
+tally:RegisterEvent("TRADE_SHOW")
+tally:RegisterEvent("TRADE_MONEY_CHANGED")
+tally:RegisterEvent("TRADE_ACCEPT_UPDATE")
+tally:RegisterEvent("TRADE_CLOSED")
+tally:RegisterEvent("UI_INFO_MESSAGE")
 tally:RegisterEvent("PLAYER_ENTERING_WORLD")
 tally:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 tally:RegisterEvent("READY_CHECK")
@@ -2212,6 +2491,10 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
         UpdateCrew()   -- catch the crew label on login/zone if roster events were missed
         if db.uiShown and not ui:IsShown() then ui:Show() end   -- survive zoning
         Render()
+    elseif event == "TRADE_SHOW" or event == "TRADE_MONEY_CHANGED"
+            or event == "TRADE_ACCEPT_UPDATE" or event == "TRADE_CLOSED"
+            or event == "UI_INFO_MESSAGE" then
+        TradeEvent(event, arg1, arg2)
     elseif event == "GROUP_ROSTER_UPDATE" then
         UpdateCrew()
         QueueBroadcast()
@@ -2234,6 +2517,7 @@ local function ShowHelp()
         "for boosters",
         { "/boost add Name 10", "track a customer - or just click names in the window" },
         { "/boost total Name 20", "change someone's package size" },
+        { "/boost paid Name 300", "record what someone paid (auto-filled by trades)" },
         { "/boost set Name 3", "correct someone's runs done" },
         { "/boost remove Name", "stop tracking someone" },
         { "/boost count", "count a run manually (mid-run catch-up)" },
@@ -2243,6 +2527,7 @@ local function ShowHelp()
         { "/boost reset", "fresh session: clear all packages and synced state (asks first)" },
         "for customers",
         { "/boost export", "your run history as copyable CSV" },
+        { "/boost spent 280", "manually record gold you paid (trades log automatically)" },
         { "/boost xpreset", "wipe XP run history (xprestore undoes it)" },
         "misc",
         { "/boost announce", "toggle routine group announcements" },
@@ -2321,6 +2606,35 @@ SlashCmdList["BOOSTBUDDY"] = function(input)
         ui:Show()
     elseif cmd == "reset" or cmd == "clear" or cmd == "newsession" then
         StaticPopup_Show("BOOSTBUDDY_FRESH_SESSION")
+    elseif cmd == "spent" and tonumber(a) then
+        local amt = math.floor(tonumber(a) * 10000)
+        if amt > 0 then
+            cdb.trades = cdb.trades or {}
+            local crew = (b ~= "" and Cap(b)) or cdb.crewLeader
+            if not crew and cdb.crewGrace and (time() - (cdb.crewGrace.t or 0)) < 900 then
+                crew = cdb.crewGrace.name
+            end
+            table.insert(cdb.trades, { t = time(), who = "(manual)", give = amt, get = 0, crew = crew })
+            while #cdb.trades > 300 do table.remove(cdb.trades, 1) end
+            if crew then
+                Print("recorded " .. FmtGold(amt) .. " paid - logged to " .. crew .. "'s session")
+            else
+                Print("recorded " .. FmtGold(amt) .. " paid - no crew to tie it to; use /boost spent " .. a .. " CrewName")
+            end
+            Render()
+            RefreshLedger()
+        end
+    elseif cmd == "paid" and a ~= "" then
+        local c = db.customers[Cap(a)]
+        if not c then
+            Print(Cap(a) .. " is not tracked")
+        else
+            local amt = math.floor((tonumber(b) or 0) * 10000)
+            c.paid = amt > 0 and amt or nil
+            Print(Cap(a) .. " marked as " ..
+                (amt > 0 and ("paid " .. FmtGold(amt)) or "unpaid"))
+            Render()
+        end
     elseif cmd == "total" and a ~= "" and tonumber(b) then
         local c = db.customers[Cap(a)]
         if c then
