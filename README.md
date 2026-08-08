@@ -65,6 +65,12 @@ The first time you open BoostBuddy it asks one question: **are you a booster or 
 
 ## The Ledger
 
+<div align="center">
+
+![The Ledger](https://i.imgur.com/euXTqN9.png)
+
+</div>
+
 Click **History** in the window and your runs become **boost sessions**: grouped by day and crew, expandable down to individual runs, each session showing its time span, run count, XP, session length, your level (green when you dinged that sitting), **gold paid, and your private note on that crew**.
 
 - **Sessions know their crew.** Crew identity locks in when you join the group and survives leadership handoffs — the seller passing lead to a booster mid-package doesn't split your history. Crew names are class-colored.
