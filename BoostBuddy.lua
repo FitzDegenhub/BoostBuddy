@@ -156,6 +156,66 @@ local function SenderIsGroupLeader(sender)
     return false
 end
 
+local function GroupLeaderName()
+    for _, u in ipairs(GroupUnits()) do
+        if UnitIsGroupLeader(u) then
+            local _, class = UnitClass(u)
+            return UnitName(u), class
+        end
+    end
+end
+
+-- crew identity: the label for "who you're running with" locks in when you
+-- join a group and SURVIVES leadership handoffs (the seller often passes
+-- lead to a booster mid-package). Only actually leaving the group ends the
+-- crew. A short grace window covers runs banked just after a disband.
+local function UpdateCrew()
+    if IsInGroup() then
+        if not cdb.crewLeader then
+            local name, class = GroupLeaderName()
+            if name then
+                cdb.crewLeader, cdb.crewClass = name, class
+                -- surface your own crew reputation right when it matters
+                local note = db.crewNotes and db.crewNotes[name]
+                if note then
+                    Print("crew note for " .. ClassColorName(name, class) .. ": \"" .. note .. "\"")
+                end
+            end
+        end
+    elseif cdb.crewLeader then
+        cdb.crewGrace = { name = cdb.crewLeader, class = cdb.crewClass, t = time() }
+        cdb.crewLeader, cdb.crewClass = nil, nil
+        -- leaving the group ends the session: retire FINISHED packages right
+        -- away so the next crew starts clean. Unfinished packages are owed
+        -- runs and survive the disband.
+        local dropped, kept = 0, 0
+        for name, c in pairs(db.customers) do
+            if c.used >= c.total then
+                db.customers[name] = nil
+                dropped = dropped + 1
+            else
+                kept = kept + 1
+            end
+        end
+        if cdb.myBoost and cdb.myBoost.used >= cdb.myBoost.total then
+            cdb.myBoost = nil
+            dropped = dropped + 1
+        end
+        if dropped > 0 then
+            Print("session over - cleared " .. dropped .. " finished package(s)" ..
+                (kept > 0 and (", kept " .. kept .. " unfinished (owed runs)") or "") ..
+                ". Ready for the next crew.")
+        end
+    end
+end
+
+local function CrewForBanking()
+    if cdb.crewLeader then return cdb.crewLeader, cdb.crewClass end
+    local g = cdb.crewGrace
+    if g and g.t and (time() - g.t) < 900 then return g.name, g.class end
+    return GroupLeaderName()
+end
+
 -- ================================================================== tally ==
 local tally = CreateFrame("Frame", "BoostBuddyFrame", UIParent)
 tally:SetSize(220, 48)
@@ -184,7 +244,10 @@ local function MyPackage()
     if mb and mb.from and GroupNames()[mb.from] then return mb end
     local mine = db.customers[UnitName("player")]
     if mine then return { used = mine.used, total = mine.total, from = "self" } end
-    return mb
+    -- last-known sync is only trustworthy for a couple of hours; after that
+    -- it's yesterday's booster haunting the display
+    if mb and mb.t and (time() - mb.t) < 2 * 3600 then return mb end
+    return nil
 end
 
 -- copy-paste CSV export of the run ledger
@@ -297,6 +360,52 @@ end
 
 local RefreshUI -- forward declaration
 local runScroll = 0   -- window into the Previous Runs ledger (0 = newest)
+local RefreshLedger = function() end   -- re-assigned once the Ledger exists
+
+-- runs folded into boost sessions: consecutive runs on the same day under
+-- the same group leader (with <1h gaps) are one session - which matches how
+-- boosts are actually bought: a package from one crew, then a break
+local function BuildSessions()
+    local sessions = {}
+    for i = 1, #cdb.runs do
+        local run = cdb.runs[i]
+        local day = run.t and date("%b %d", run.t) or "?"
+        local leader = run.leader or "?"
+        local last = sessions[#sessions]
+        local sameSession = last and last.day == day and last.leader == leader
+            and run.t and last.lastT and (run.t - last.lastT) < 3600
+        if not sameSession then
+            last = { day = day, leader = leader, leaderClass = run.leaderClass,
+                     runs = 0, xp = 0,
+                     firstT = run.t, lvl0 = run.lvl, runIdxs = {}, insts = {} }
+            table.insert(sessions, last)
+        end
+        last.leaderClass = last.leaderClass or run.leaderClass
+        last.runs = last.runs + 1
+        last.xp = last.xp + (run.xp or 0)
+        last.lastT = run.t
+        last.lvl1 = run.lvl
+        table.insert(last.runIdxs, i)
+        if run.inst then
+            local short = run.inst:match("([^:]+)$"):gsub("^%s+", "")
+            last.insts[short] = true
+        end
+    end
+    return sessions
+end
+
+-- instances entered across the whole account in the trailing hour, plus
+-- seconds until the oldest one ages out (the 5/hour cap is account-wide)
+local function InstanceUses()
+    local now, n, oldest = time(), 0, nil
+    for _, t in ipairs(db.instanceLog or {}) do
+        if now - t < 3600 then
+            n = n + 1
+            if not oldest or t < oldest then oldest = t end
+        end
+    end
+    return n, oldest and (3600 - (now - oldest)) or 0
+end
 
 local function Render()
     -- learn classes of registered customers who are in the group right now
@@ -461,6 +570,7 @@ local function CountRun(source)
     for name, c in pairs(db.customers) do
         if present[name] and c.used < c.total then
             c.used = c.used + 1
+            c.lastCount = time()
             table.insert(counted, name)
         end
     end
@@ -498,6 +608,10 @@ local function CountRun(source)
         for _, name in ipairs(counted) do
             local c = db.customers[name]
             if c.used >= c.total then
+                -- the run now starting is a FINAL run: the package reads
+                -- complete, but XP tracking must stay alive until the run
+                -- actually ends (flag cleared when the run banks)
+                cdb.finalRunActive = true
                 PlaySound(8959, "Master")
                 break
             end
@@ -547,16 +661,25 @@ local function BankRunXP()
     local dur = cdb.runStart and (time() - cdb.runStart) or nil
     cdb.lastBankedDur = dur
     cdb.lastBankedXP = cdb.runXP or 0
-    if (cdb.runXP or 0) > 0 then
+    -- customers bank runs that earned XP; boosters bank every counted run
+    -- (their XP is 0 at max level, but the Ledger still wants the history)
+    if (cdb.runXP or 0) > 0 or (cdb.role == "booster" and (Engaged() or cdb.finalRunActive)) then
         table.insert(cdb.runs, {
             xp = cdb.runXP,
             dur = dur,
             t = time(),
+            -- context for the history view: who ran it, where, at what level
+            leader = nil,   -- filled below
+            inst = db.lastInstance,
+            lvl = UnitLevel("player"),
         })
-        while #cdb.runs > 100 do table.remove(cdb.runs, 1) end
+        local rec = cdb.runs[#cdb.runs]
+        rec.leader, rec.leaderClass = CrewForBanking()
+        while #cdb.runs > 400 do table.remove(cdb.runs, 1) end
     end
     cdb.runStart = nil
     cdb.runXP = 0
+    cdb.finalRunActive = nil   -- a banked run is an ended run
 end
 
 local function UndoLastCount()
@@ -669,6 +792,13 @@ local function OnSpawnConfirmed(spawn)
     end
     local firstEver = (db.spawnID == nil)
     db.spawnID = spawn
+    -- every new spawn id = a distinct instance visited: log it for the
+    -- 5-per-hour lockout display (account-wide, like the cap itself)
+    db.instanceLog = db.instanceLog or {}
+    table.insert(db.instanceLog, time())
+    for i = #db.instanceLog, 1, -1 do
+        if time() - db.instanceLog[i] > 3600 then table.remove(db.instanceLog, i) end
+    end
     if firstEver then
         db.cycleCounted = false
         if db.debug then Print("debug: instance spawn recorded (" .. spawn .. ")") end
@@ -708,6 +838,7 @@ ui:SetBackdrop({
 ui:SetBackdropColor(0.055, 0.045, 0.09, 0.96)
 ui:SetBackdropBorderColor(0.35, 0.55, 0.22, 1)
 ui:SetFrameStrata("DIALOG")
+ui:SetToplevel(true)   -- clicking a window brings it to the front
 ui:Hide()
 ui:EnableMouseWheel(true)
 ui:SetScript("OnMouseWheel", function(_, delta)
@@ -739,6 +870,300 @@ ui.overlayBtn:SetScript("OnClick", function()
     db.tallyHide = not db.tallyHide
     Render()
 end)
+
+-- ================================================================ ledger ==
+-- The detailed history window: wider than the main window, sessions grouped
+-- by day, each expandable down to individual runs. NIT-style depth, but with
+-- real rows instead of a text wall.
+local ledger
+local ledgerRows = {}
+local ledgerOpenDay = {}       -- [day] = explicit open/closed (nil = default)
+local ledgerOpenSession = {}   -- [day .. "#" .. n] = expanded
+local ledgerBuiltFor = -1
+
+local LCOLS = {
+    { x = 8,   w = 118 },   -- time / day
+    { x = 128, w = 128 },   -- crew - instance
+    { x = 258, w = 38 },    -- runs
+    { x = 298, w = 74 },    -- xp
+    { x = 374, w = 64 },    -- avg
+    { x = 440, w = 62 },    -- length
+    { x = 504, w = 40 },    -- level
+    { x = 546, w = 176 },   -- note
+}
+
+local function GetLedgerRow(i)
+    if ledgerRows[i] then return ledgerRows[i] end
+    local row = CreateFrame("Button", nil, ledger.content)
+    row:SetSize(744, 20)
+    row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    row.bg = row:CreateTexture(nil, "BACKGROUND")
+    row.bg:SetAllPoints()
+    row.cols = {}
+    for c, def in ipairs(LCOLS) do
+        local fs = row:CreateFontString(nil, "OVERLAY")
+        fs:SetFont(STANDARD_TEXT_FONT, 12)
+        fs:SetPoint("LEFT", def.x, 0)
+        fs:SetWidth(def.w)
+        fs:SetJustifyH("LEFT")
+        fs:SetWordWrap(false)
+        row.cols[c] = fs
+    end
+    row.del = CreateFrame("Button", nil, row)
+    row.del:SetSize(16, 16)
+    row.del:SetPoint("RIGHT", -4, 0)
+    row.del.label = row.del:CreateFontString(nil, "OVERLAY")
+    row.del.label:SetFont(STANDARD_TEXT_FONT, 12, "OUTLINE")
+    row.del.label:SetAllPoints()
+    row.del.label:SetText("|cffe05c4cx|r")
+    row.del:SetScript("OnEnter", function(b) b.label:SetText("|cffff2020X|r") end)
+    row.del:SetScript("OnLeave", function(b) b.label:SetText("|cffe05c4cx|r") end)
+    ledgerRows[i] = row
+    return row
+end
+
+local function RenderLedger()
+    if not ledger then return end
+    local sessions = BuildSessions()
+    local days, dayOrder = {}, {}
+    for i = #sessions, 1, -1 do
+        local s = sessions[i]
+        if not days[s.day] then
+            days[s.day] = { sessions = {}, runs = 0, xp = 0 }
+            table.insert(dayOrder, s.day)
+        end
+        local d = days[s.day]
+        table.insert(d.sessions, s)
+        d.runs = d.runs + s.runs
+        d.xp = d.xp + s.xp
+    end
+
+    local idx, yy = 0, 0
+    local function place()
+        idx = idx + 1
+        local row = GetLedgerRow(idx)
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", 0, yy)
+        for _, fs in ipairs(row.cols) do fs:SetText("") end
+        row.del:Hide()
+        row.del:SetScript("OnClick", nil)
+        row:SetScript("OnClick", nil)
+        row:SetScript("OnEnter", nil)
+        row:SetScript("OnLeave", nil)
+        row:Show()
+        yy = yy - 21
+        return row
+    end
+
+    for dn, day in ipairs(dayOrder) do
+        local d = days[day]
+        local open = ledgerOpenDay[day]
+        if open == nil then open = (dn == 1) end
+        local r = place()
+        r.bg:SetColorTexture(0.35, 0.55, 0.22, 0.16)
+        r.cols[1]:SetText((open and GREEN .. "-|r  " or GREEN .. "+|r  ") .. GOLD .. day .. "|r")
+        r.cols[2]:SetText(GREY .. #d.sessions .. " session" .. (#d.sessions == 1 and "" or "s") .. "|r")
+        r.cols[3]:SetText(GREY .. "x|r" .. d.runs)
+        r.cols[4]:SetText(GOLD .. FmtXP(d.xp) .. "|r")
+        r:SetScript("OnClick", function()
+            ledgerOpenDay[day] = not open
+            RenderLedger()
+        end)
+        if open then
+            for sn, s in ipairs(d.sessions) do
+                local skey = day .. "#" .. sn
+                local sopen = ledgerOpenSession[skey]
+                local sr = place()
+                sr.bg:SetColorTexture(1, 1, 1, sn % 2 == 0 and 0.03 or 0.06)
+                local t1 = s.firstT and date("%H:%M", s.firstT) or "?"
+                local t2 = s.lastT and date("%H:%M", s.lastT) or t1
+                sr.cols[1]:SetText("   " .. (sopen and GREEN .. "v|r " or GREY .. ">|r ") ..
+                    GREY .. t1 .. "-" .. t2 .. "|r")
+                local instNames = {}
+                for k in pairs(s.insts or {}) do table.insert(instNames, k) end
+                table.sort(instNames)
+                local inst = table.concat(instNames, ", ")
+                local lc = s.leaderClass
+                if not lc then
+                    -- runs recorded before class-stamping existed: if that
+                    -- player is in the group right now, ask the client live
+                    for _, u in ipairs(GroupUnits()) do
+                        if UnitName(u) == s.leader then
+                            local _, cls = UnitClass(u)
+                            lc = cls
+                            break
+                        end
+                    end
+                end
+                local note = db.crewNotes and db.crewNotes[s.leader]
+                sr.cols[2]:SetText(ClassColorName(DisplayName(s.leader), lc) ..
+                    (inst ~= "" and (GREY .. " - " .. inst .. "|r") or ""))
+                sr.cols[8]:SetText(note and (GOLD .. note .. "|r") or "")
+                sr:SetScript("OnEnter", function(self)
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    if note then
+                        GameTooltip:SetText(DisplayName(s.leader), 1, 0.82, 0)
+                        GameTooltip:AddLine(note, 1, 1, 1, true)
+                        GameTooltip:AddLine(" ")
+                    else
+                        GameTooltip:SetText(DisplayName(s.leader), 1, 0.82, 0)
+                    end
+                    GameTooltip:AddLine("right-click to " .. (note and "edit" or "add") .. " a crew note", 0.6, 0.6, 0.6)
+                    GameTooltip:Show()
+                end)
+                sr:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                sr.cols[3]:SetText(GREY .. "x|r" .. s.runs)
+                sr.cols[4]:SetText(FmtXP(s.xp))
+                sr.cols[5]:SetText(GREY .. FmtXP(s.xp / s.runs) .. "|r")
+                sr.cols[6]:SetText(GREY .. ((s.firstT and s.lastT and s.lastT > s.firstT)
+                    and FmtEta(s.lastT - s.firstT) or "") .. "|r")
+                local lvltext = ""
+                if s.lvl0 and s.lvl1 and s.lvl1 > s.lvl0 then
+                    lvltext = GREEN .. s.lvl0 .. ">" .. s.lvl1 .. "|r"   -- dinged this session
+                elseif s.lvl1 or s.lvl0 then
+                    lvltext = GREY .. (s.lvl1 or s.lvl0) .. "|r"
+                end
+                sr.cols[7]:SetText(lvltext)
+                sr.del:SetScript("OnClick", function()
+                    local idxs = {}
+                    for _, ri in ipairs(s.runIdxs or {}) do table.insert(idxs, ri) end
+                    local desc = DisplayName(s.leader) .. " - " .. s.day .. " - " ..
+                        s.runs .. " run" .. (s.runs == 1 and "" or "s") .. ", " .. FmtXP(s.xp) .. " XP"
+                    StaticPopup_Show("BOOSTBUDDY_DELETE_SESSION", desc, nil, { idxs = idxs, desc = desc })
+                end)
+                sr.del:Show()
+                sr:SetScript("OnClick", function(_, button)
+                    if button == "RightButton" then
+                        if s.leader ~= "?" then
+                            -- data goes IN the Show call so OnShow can prefill
+                            StaticPopup_Show("BOOSTBUDDY_CREW_NOTE", s.leader, nil, s.leader)
+                        else
+                            Print("no crew was recorded for that session")
+                        end
+                        return
+                    end
+                    ledgerOpenSession[skey] = not sopen
+                    RenderLedger()
+                end)
+                if sopen then
+                    for j, ri in ipairs(s.runIdxs or {}) do
+                        local run = cdb.runs[ri]
+                        if run then
+                            local rr = place()
+                            rr.bg:SetColorTexture(0, 0, 0, 0)
+                            -- numbered within THIS session, matching how the
+                            -- package was counted with that crew
+                            rr.cols[1]:SetText(GREY .. "        run " .. j .. "|r")
+                            rr.cols[2]:SetText(GREY .. (run.t and date("%H:%M", run.t) or "") .. "|r")
+                            rr.cols[4]:SetText(GREY .. FmtXP(run.xp) .. "|r")
+                            rr.cols[6]:SetText(GREY .. (run.dur and FmtDur(run.dur) or "") .. "|r")
+                        end
+                    end
+                end
+            end
+        end
+    end
+    if idx == 0 then
+        local r = place()
+        r.bg:SetColorTexture(0, 0, 0, 0)
+        r.cols[1]:SetText(GREY .. "no runs recorded yet|r")
+    end
+    for i = idx + 1, #ledgerRows do ledgerRows[i]:Hide() end
+    ledger.content:SetHeight(math.max(1, -yy))
+    local totalRuns, totalXP = 0, 0
+    for _, s in ipairs(sessions) do totalRuns = totalRuns + s.runs totalXP = totalXP + s.xp end
+    ledger.totals:SetText(GREY .. #sessions .. " sessions - " .. totalRuns .. " runs - |r" ..
+        GOLD .. FmtXP(totalXP) .. " XP|r")
+    ledgerBuiltFor = #cdb.runs
+end
+
+local function BuildLedger()
+    ledger = CreateFrame("Frame", "BoostBuddyLedger", UIParent, "BackdropTemplate")
+    ledger:SetSize(790, 400)
+    if db.ledgerPos then
+        ledger:SetPoint(db.ledgerPos[1], UIParent, db.ledgerPos[2], db.ledgerPos[3], db.ledgerPos[4])
+    else
+        ledger:SetPoint("CENTER", 140, 0)
+    end
+    ledger:SetMovable(true)
+    ledger:EnableMouse(true)
+    ledger:RegisterForDrag("LeftButton")
+    ledger:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    ledger:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local point, _, relPoint, x, y = self:GetPoint()
+        db.ledgerPos = { point, relPoint, x, y }
+    end)
+    ledger:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1,
+    })
+    ledger:SetBackdropColor(0.055, 0.045, 0.09, 0.96)
+    ledger:SetBackdropBorderColor(0.35, 0.55, 0.22, 1)
+    ledger:SetFrameStrata("DIALOG")
+    ledger:SetToplevel(true)
+
+    local ltitle = ledger:CreateFontString(nil, "OVERLAY")
+    ltitle:SetFont(STANDARD_TEXT_FONT, 15, "OUTLINE")
+    ltitle:SetPoint("TOPLEFT", 12, -10)
+    ltitle:SetText(GREEN .. "BoostBuddy|r" .. GREY .. " - Ledger|r")
+
+    local hint = ledger:CreateFontString(nil, "OVERLAY")
+    hint:SetFont(STANDARD_TEXT_FONT, 11)
+    hint:SetPoint("TOPLEFT", ltitle, "TOPRIGHT", 10, -2)
+    hint:SetText(GREY .. "click to expand - right-click a session for crew notes|r")
+
+    local lclose = CreateFrame("Button", nil, ledger, "UIPanelCloseButton")
+    lclose:SetPoint("TOPRIGHT", 2, 2)
+    lclose:SetScript("OnClick", function() ledger:Hide() end)
+
+    local heads = { "TIME", "CREW - INSTANCE", "RUNS", "XP", "AVG", "LENGTH", "LVL", "NOTE" }
+    for c, def in ipairs(LCOLS) do
+        local fs = ledger:CreateFontString(nil, "OVERLAY")
+        fs:SetFont(STANDARD_TEXT_FONT, 10)
+        fs:SetPoint("TOPLEFT", def.x + 8, -34)
+        fs:SetWidth(def.w)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(GREY .. heads[c] .. "|r")
+    end
+
+    local scroll = CreateFrame("ScrollFrame", "BoostBuddyLedgerScroll", ledger, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", 8, -50)
+    scroll:SetPoint("BOTTOMRIGHT", -30, 30)
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(744, 1)
+    scroll:SetScrollChild(content)
+    ledger.content = content
+
+    ledger.totals = ledger:CreateFontString(nil, "OVERLAY")
+    ledger.totals:SetFont(STANDARD_TEXT_FONT, 11)
+    ledger.totals:SetPoint("BOTTOMLEFT", 12, 10)
+
+    ledger:Hide()   -- frames spawn visible; the toggle expects hidden
+end
+
+local function ToggleLedger()
+    if not ledger then BuildLedger() end
+    if ledger:IsShown() then
+        ledger:Hide()
+    else
+        RenderLedger()
+        ledger:Show()
+        ledger:Raise()   -- open on top of the main window
+    end
+end
+
+RefreshLedger = function()
+    if ledger and ledger:IsShown() then RenderLedger() end
+end
+
+ui.historyBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
+ui.historyBtn:SetSize(58, 18)
+ui.historyBtn:SetPoint("RIGHT", ui.overlayBtn, "LEFT", -5, 0)
+ui.historyBtn:GetFontString():SetFont(STANDARD_TEXT_FONT, 10)
+ui.historyBtn:SetText("History")
+ui.historyBtn:SetScript("OnClick", ToggleLedger)
 
 -- first-run role chooser buttons
 ui.pickCustomer = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
@@ -827,8 +1252,16 @@ RefreshUI = function()
 
     -- first open: pick a side; the choice sticks (per character)
     local role = cdb.role
+    local uses, nextFree = InstanceUses()
+    local lockText = ""
+    if uses > 0 then
+        local color = uses >= 5 and "|cffe05c4c" or GREY
+        lockText = color .. "   instances: " .. uses .. "/5"
+        if uses >= 5 then lockText = lockText .. " - next in " .. math.max(1, math.ceil(nextFree / 60)) .. "m" end
+        lockText = lockText .. "|r"
+    end
     title:SetText(GREEN .. "BoostBuddy|r" .. (role and
-        (GREY .. " - " .. (role == "booster" and "Booster" or "Customer") .. "|r") or ""))
+        (GREY .. " - " .. (role == "booster" and "Booster" or "Customer") .. "|r") or "") .. lockText)
     ui.overlayBtn:SetText("Overlay: " .. (db.tallyHide and "off" or "on"))
     if not role then
         hint:SetText(GOLD .. "Are you a customer or a booster?|r")
@@ -1008,9 +1441,10 @@ RefreshUI = function()
         y = y - 6
         ui.footerNote:ClearAllPoints()
         ui.footerNote:SetPoint("TOPLEFT", 13, y)
-        ui.footerNote:SetWidth(212)
+        -- stop short of the History button so the footer never overlaps it
+        ui.footerNote:SetWidth(160)
         ui.footerNote:SetText("a run banks its XP when the dungeon gets reset")
-        y = y - 24
+        y = y - 30
         ui:SetHeight(-y + 10)
         return
     end
@@ -1113,9 +1547,10 @@ RefreshUI = function()
     y = y - 27
     ui.footerNote:ClearAllPoints()
     ui.footerNote:SetPoint("TOPLEFT", 13, y)
-    ui.footerNote:SetWidth(212)
+    -- stop short of the History button so the footer never overlaps it
+    ui.footerNote:SetWidth(160)
     ui.footerNote:SetText("counts are automatic - manual corrections are always announced to the group")
-    y = y - 24
+    y = y - 30
 
     ui:SetHeight(-y + 10)
 end
@@ -1197,6 +1632,90 @@ StaticPopupDialogs["BOOSTBUDDY_REMOVE"] = {
         db.customers[name] = nil
         AnnounceAlways(UnitName("player") .. " removed " .. name ..
             " (was " .. c.used .. "/" .. c.total .. ")")
+        BroadcastState()
+        Render()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["BOOSTBUDDY_DELETE_SESSION"] = {
+    text = "Delete this session?\n\n%s\n\nThese runs are removed from your XP history permanently.",
+    button1 = ACCEPT,
+    button2 = CANCEL,
+    showAlert = true,
+    OnAccept = function(self)
+        local d = self.data
+        if not d or not d.idxs or not cdb then return end
+        table.sort(d.idxs, function(a, b) return a > b end)
+        for _, i in ipairs(d.idxs) do table.remove(cdb.runs, i) end
+        for k in pairs(ledgerOpenSession) do ledgerOpenSession[k] = nil end
+        Print("deleted session: " .. d.desc)
+        Render()
+        RefreshLedger()
+    end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["BOOSTBUDDY_CREW_NOTE"] = {
+    text = "Note for crew %s:\n\n(who's good, who's sketchy, prices - saved account-wide)",
+    button1 = SAVE,
+    button2 = CANCEL,
+    hasEditBox = true,
+    editBoxWidth = 260,
+    maxLetters = 150,
+    OnShow = function(self)
+        local eb = PopupEditBox(self)
+        if eb then
+            eb:SetText((db and db.crewNotes and db.crewNotes[self.data]) or "")
+            eb:HighlightText()
+        end
+    end,
+    OnAccept = function(self)
+        if not db then return end
+        db.crewNotes = db.crewNotes or {}
+        local eb = PopupEditBox(self)
+        local text = eb and eb:GetText() or ""
+        if text:match("^%s*$") then
+            db.crewNotes[self.data] = nil
+            Print("note for " .. self.data .. " removed")
+        else
+            db.crewNotes[self.data] = text
+            Print("note saved for " .. self.data)
+        end
+        Render()
+        RefreshLedger()
+    end,
+    EditBoxOnEnterPressed = function(self)
+        local parent = self:GetParent()
+        StaticPopupDialogs["BOOSTBUDDY_CREW_NOTE"].OnAccept(parent)
+        parent:Hide()
+    end,
+    EditBoxOnEscapePressed = function(self) self:GetParent():Hide() end,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+}
+
+StaticPopupDialogs["BOOSTBUDDY_FRESH_SESSION"] = {
+    text = "Start a fresh session?\n\nThis clears ALL tracked packages and synced boost state. Your run history and XP stats are kept.",
+    button1 = ACCEPT,
+    button2 = CANCEL,
+    OnAccept = function()
+        if not db then return end
+        db.customers = {}
+        db.lastCounted = nil
+        cdb.myBoost = nil
+        cdb.finalRunActive = nil
+        if IsInGroup() then
+            AnnounceAlways("MANUAL: " .. UnitName("player") ..
+                " started a fresh session - all packages cleared")
+        else
+            Print("fresh session - all packages cleared")
+        end
         BroadcastState()
         Render()
     end,
@@ -1545,13 +2064,17 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
             for entry in (payload or ""):gmatch("[^;]+") do
                 local name, used, total = entry:match("^(.-):(%d+):(%d+)$")
                 if name == me then
-                    found = { used = tonumber(used), total = tonumber(total), from = sender }
+                    found = { used = tonumber(used), total = tonumber(total), from = sender, t = time() }
                 end
             end
             if found then
                 local old = cdb.myBoost
                 if not old or old.used ~= found.used or old.total ~= found.total then
                     Print(("package sync: %d/%d (from %s)"):format(found.used, found.total, sender))
+                end
+                -- booster-tracked final run: keep XP alive through it
+                if found.used >= found.total and (not old or old.used < found.used) then
+                    cdb.finalRunActive = true
                 end
                 cdb.myBoost = found
             elseif cdb.myBoost and cdb.myBoost.from == sender then
@@ -1602,7 +2125,7 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
         local delta = cur - (cdb.lastXP or cur)
         if delta < 0 then delta = delta + (cdb.lastXPMax or curMax) end   -- leveled up mid-gain
         cdb.lastXP, cdb.lastXPMax = cur, curMax
-        if cdb.inRun and delta > 0 and not db.paused and Engaged() then
+        if cdb.inRun and delta > 0 and not db.paused and (Engaged() or cdb.finalRunActive) then
             cdb.runXP = (cdb.runXP or 0) + delta
         end
         Render()
@@ -1617,14 +2140,39 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
         if not cdb.lastXP then
             cdb.lastXP, cdb.lastXPMax = UnitXP("player"), UnitXPMax("player")
         end
+        local wasInRun = cdb.inRun
         cdb.inRun = inside
         if inside then
             cdb.lastEntryTime = time()
             visitConfirmed, pendingSpawn = false, nil
+        elseif wasInRun and cdb.finalRunActive then
+            -- leaving the instance ends the final run: no later reset will be
+            -- counted (package complete = addon idle), so bank the XP now
+            BankRunXP()
         end
         -- arg1/arg2 = isInitialLogin/isReloadingUi (PLAYER_ENTERING_WORLD only):
         -- a reload or login is NOT a fresh zone-in, so the run clock keeps ticking
         local isLoginOrReload = (event == "PLAYER_ENTERING_WORLD") and (arg1 or arg2)
+        -- session hygiene: on a true login (not a reload), retire FINISHED
+        -- packages from earlier sessions. Unfinished packages are owed runs
+        -- and never expire on their own.
+        if event == "PLAYER_ENTERING_WORLD" and arg1 then
+            local dropped = 0
+            for name, c in pairs(db.customers) do
+                if c.used >= c.total and (not c.lastCount or time() - c.lastCount > 8 * 3600) then
+                    db.customers[name] = nil
+                    dropped = dropped + 1
+                end
+            end
+            if cdb.myBoost and cdb.myBoost.used >= cdb.myBoost.total
+                    and (not cdb.myBoost.t or time() - cdb.myBoost.t > 8 * 3600) then
+                cdb.myBoost = nil
+                dropped = dropped + 1
+            end
+            if dropped > 0 then
+                Print("cleared " .. dropped .. " finished package(s) from an earlier session - /boost reset clears everything")
+            end
+        end
         if inside and not isLoginOrReload and (not cdb.runStart or (cdb.runXP or 0) == 0) then
             cdb.runStart = time()   -- fresh cycle: clock starts at this zone-in
         end
@@ -1636,6 +2184,7 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
             for name, c in pairs(db.customers) do
                 if present[name] and c.used == 0 then
                     c.used = 1
+                    c.lastCount = time()
                     table.insert(started, name)
                 end
             end
@@ -1644,6 +2193,10 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
                 cdb.runStart = time()
                 cdb.runXP = 0
                 table.sort(started)
+                for _, name in ipairs(started) do
+                    local c = db.customers[name]
+                    if c.used >= c.total then cdb.finalRunActive = true break end
+                end
                 if IAmAnnouncer() then
                     Announce("New Instance Run Detected")
                     for _, name in ipairs(started) do
@@ -1656,9 +2209,11 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
                 BroadcastState()
             end
         end
+        UpdateCrew()   -- catch the crew label on login/zone if roster events were missed
         if db.uiShown and not ui:IsShown() then ui:Show() end   -- survive zoning
         Render()
     elseif event == "GROUP_ROSTER_UPDATE" then
+        UpdateCrew()
         QueueBroadcast()
         Render()
     else
@@ -1685,7 +2240,7 @@ local function ShowHelp()
         { "/boost undo", "take the last counted run back" },
         { "/boost ready", "start a ready check" },
         { "/boost list", "print the roster to chat" },
-        { "/boost clear", "wipe the whole roster" },
+        { "/boost reset", "fresh session: clear all packages and synced state (asks first)" },
         "for customers",
         { "/boost export", "your run history as copyable CSV" },
         { "/boost xpreset", "wipe XP run history (xprestore undoes it)" },
@@ -1760,10 +2315,12 @@ SlashCmdList["BOOSTBUDDY"] = function(input)
         db.minimapHide = not db.minimapHide
         BoostBuddyMinimapButton:SetShown(not db.minimapHide)
         Print("minimap button " .. (db.minimapHide and "hidden" or "shown"))
-    elseif cmd == "role" or cmd == "reset" then
+    elseif cmd == "role" then
         cdb.role = nil
         db.uiShown = true
         ui:Show()
+    elseif cmd == "reset" or cmd == "clear" or cmd == "newsession" then
+        StaticPopup_Show("BOOSTBUDDY_FRESH_SESSION")
     elseif cmd == "total" and a ~= "" and tonumber(b) then
         local c = db.customers[Cap(a)]
         if c then
@@ -1796,11 +2353,6 @@ SlashCmdList["BOOSTBUDDY"] = function(input)
     elseif cmd == "announce" then
         db.announce = not db.announce
         Print("party announcements: " .. (db.announce and "ON" or "OFF"))
-    elseif cmd == "clear" then
-        local was = StatusOneLine()
-        db.customers = {}
-        AnnounceAlways(UnitName("player") .. " cleared all customers" ..
-            (was ~= "" and (" (was: " .. was .. ")") or ""))
     elseif cmd == "list" then
         Print(next(db.customers) and StatusOneLine() or "no customers")
     elseif cmd == "xpreset" then
@@ -1826,3 +2378,10 @@ SlashCmdList["BOOSTBUDDY"] = function(input)
     BroadcastState()
     Render()
 end
+
+-- keep the lockout countdown and an open ledger fresh
+C_Timer.NewTicker(30, function()
+    if not db then return end
+    if ui and ui:IsShown() then Render() end
+    if ledger and ledger:IsShown() and ledgerBuiltFor ~= #cdb.runs then RenderLedger() end
+end)

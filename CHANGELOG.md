@@ -1,5 +1,35 @@
 # BoostBuddy Changelog
 
+## 1.0.12 — 2026-08-08
+
+**The Ledger.** A new History window (button next to Overlay) shows your runs
+as boost sessions - grouped by day and crew, expandable down to individual
+runs, with class-colored crew names, per-crew run numbering, session length,
+level progress, and a NOTE column for your own crew reputation notes
+(right-click a session to write one; notes greet you in chat when you join
+a group led by someone you've noted). Sessions can be deleted (with
+confirmation). Crew identity survives leadership handoffs - the seller
+passing lead to a booster mid-package no longer splits your history.
+
+**Session lifecycle fixes** (thanks to a sharp bug report):
+- The final run of a package now collects and banks XP properly - it used
+  to freeze XP the moment the count hit N/N.
+- Leaving or disbanding a group ends the session: finished packages are
+  retired immediately, so the next crew starts with clean package buttons.
+  Unfinished packages survive - owed runs stay owed.
+- On a true login, finished packages older than ~8 hours are cleaned up.
+- `/boost reset` now actually resets: confirmation popup, clears all
+  packages and synced state, keeps history. Role re-picking is `/boost role`.
+- A departed booster's synced state now expires instead of haunting the
+  window (which also restores XP tracking and the package buttons).
+
+**Lockout tracking**: the window title shows instances entered this hour
+(account-wide, like the real 5-per-hour cap) with a countdown when capped.
+
+**Also**: boosters now record run history too (the Ledger works for both
+roles; no customer names are ever stored), plus footer layout and window
+stacking fixes.
+
 ## 1.0.11 — 2026-08-07
 
 - **Level-up ETA**: the "level up in ~N runs" projection now also shows the
