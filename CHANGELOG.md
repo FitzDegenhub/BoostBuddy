@@ -1,5 +1,20 @@
 # BoostBuddy Changelog
 
+## 1.1.2 — 2026-08-08
+
+- **Final-run XP fix, round two.** Crews that reset while everyone is still
+  inside the dungeon broke the last run's XP tracking: the hop out of the
+  old instance was mistaken for the final run ending, and the actual final
+  run collected nothing. The addon now remembers WHICH instance the final
+  run is - armed at the count, confirmed at the next zone-in, banked only
+  when that instance ends. Both crew styles (reset-inside and
+  reset-outside) now collect and bank the last run correctly.
+- If the group disbands while a final run is still pending, whatever XP it
+  gathered is banked to the right crew instead of being lost.
+- **Fixed the "Undo last" button**, broken since 1.0.6 - clicking it threw
+  an error instead of opening the confirmation. The `[undo last count]`
+  chat link and `/boost undo` were unaffected.
+
 ## 1.1.1 — 2026-08-08
 
 - **Session-forming row.** Join a crew and pay before the first run? The

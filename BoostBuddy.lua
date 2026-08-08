@@ -135,6 +135,8 @@ end
 -- spawn-detection state (declared here so StartingUsed can reference it)
 local visitConfirmed, pendingSpawn = false, nil
 
+local BankRunXP   -- defined in the logic section; UpdateCrew's disband backstop needs it in scope
+
 -- if the group is mid-run when someone gets added, that run is their first:
 -- start them at 1 so the count never trails reality by one. If we haven't yet
 -- confirmed this instance's spawn id (we may be holding a stale one from a
@@ -204,6 +206,16 @@ local function UpdateCrew()
         notedSeen = {}
         cdb.crewGrace = { name = cdb.crewLeader, class = cdb.crewClass, t = time() }
         cdb.crewLeader, cdb.crewClass = nil, nil
+        -- a final run still pending when the group ends: bank whatever it
+        -- accrued (crewGrace above keeps the crew attribution), or stand
+        -- down quietly if the run never actually happened
+        if cdb.finalRunActive then
+            if (cdb.runXP or 0) > 0 then
+                BankRunXP()
+            else
+                cdb.finalRunActive, cdb.finalRunEntered = nil, nil
+            end
+        end
         -- leaving the group ends the session: retire FINISHED packages right
         -- away so the next crew starts clean. Unfinished packages are owed
         -- runs and survive the disband.
@@ -643,8 +655,12 @@ local function CountRun(source)
             if c.used >= c.total then
                 -- the run now starting is a FINAL run: the package reads
                 -- complete, but XP tracking must stay alive until the run
-                -- actually ends (flag cleared when the run banks)
+                -- actually ends. finalRunEntered marks whether the CURRENT
+                -- instance is that run (GUID counts fire inside it) or the
+                -- final run is the NEXT instance entered (reset counts).
                 cdb.finalRunActive = true
+                cdb.finalRunEntered = (source == "fresh instance")
+                    or (source == "manual" and cdb.inRun) or nil
                 PlaySound(8959, "Master")
                 break
             end
@@ -701,7 +717,7 @@ local function CountRun(source)
 end
 
 -- reset = run complete, so that's when the run's XP gets banked into history
-local function BankRunXP()
+function BankRunXP()
     local dur = cdb.runStart and (time() - cdb.runStart) or nil
     cdb.lastBankedDur = dur
     cdb.lastBankedXP = cdb.runXP or 0
@@ -724,6 +740,7 @@ local function BankRunXP()
     cdb.runStart = nil
     cdb.runXP = 0
     cdb.finalRunActive = nil   -- a banked run is an ended run
+    cdb.finalRunEntered = nil
 end
 
 local function UndoLastCount()
@@ -1786,6 +1803,18 @@ ui.readyBtn:SetScript("OnClick", function()
     end
 end)
 
+-- what the last count would revert to, shown in the confirm dialog
+local function UndoPreview()
+    if not db.lastCounted or #db.lastCounted == 0 then return nil end
+    local parts = {}
+    for _, name in ipairs(db.lastCounted) do
+        local c = db.customers[name]
+        if c then table.insert(parts, name .. " " .. math.max(c.used - 1, 0) .. "/" .. c.total) end
+    end
+    table.sort(parts)
+    return table.concat(parts, ", ")
+end
+
 ui.undoBtn = CreateFrame("Button", nil, ui, "UIPanelButtonTemplate")
 ui.undoBtn:SetSize(78, 22)
 ui.undoBtn:SetText("Undo last")
@@ -1974,6 +2003,7 @@ StaticPopupDialogs["BOOSTBUDDY_FRESH_SESSION"] = {
         db.lastCounted = nil
         cdb.myBoost = nil
         cdb.finalRunActive = nil
+        cdb.finalRunEntered = nil
         if IsInGroup() then
             AnnounceAlways("MANUAL: " .. UnitName("player") ..
                 " started a fresh session - all packages cleared")
@@ -2091,18 +2121,6 @@ StaticPopupDialogs["BOOSTBUDDY_UNDO"] = {
     whileDead = true,
     hideOnEscape = true,
 }
-
--- what the last count would revert to, shown in the confirm dialog
-local function UndoPreview()
-    if not db.lastCounted or #db.lastCounted == 0 then return nil end
-    local parts = {}
-    for _, name in ipairs(db.lastCounted) do
-        local c = db.customers[name]
-        if c then table.insert(parts, name .. " " .. math.max(c.used - 1, 0) .. "/" .. c.total) end
-    end
-    table.sort(parts)
-    return table.concat(parts, ", ")
-end
 
 local function ToggleUI()
     if ui:IsShown() then
@@ -2399,6 +2417,7 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
                 -- booster-tracked final run: keep XP alive through it
                 if found.used >= found.total and (not old or old.used < found.used) then
                     cdb.finalRunActive = true
+                    cdb.finalRunEntered = nil
                 end
                 cdb.myBoost = found
             elseif cdb.myBoost and cdb.myBoost.from == sender then
@@ -2469,10 +2488,17 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
         if inside then
             cdb.lastEntryTime = time()
             visitConfirmed, pendingSpawn = false, nil
+            if cdb.finalRunActive and not cdb.finalRunEntered then
+                cdb.finalRunEntered = true   -- this zone-in IS the final run
+            end
         elseif wasInRun and cdb.finalRunActive then
-            -- leaving the instance ends the final run: no later reset will be
-            -- counted (package complete = addon idle), so bank the XP now
-            BankRunXP()
+            -- bank only when the final run itself ends - NOT on the hop out
+            -- of the previous instance right after an inside-the-dungeon
+            -- final count (that hop was eating the whole last run's XP).
+            -- Any stray XP from that hop carries into the final run's total.
+            if cdb.finalRunEntered then
+                BankRunXP()
+            end
         end
         -- arg1/arg2 = isInitialLogin/isReloadingUi (PLAYER_ENTERING_WORLD only):
         -- a reload or login is NOT a fresh zone-in, so the run clock keeps ticking
@@ -2519,7 +2545,11 @@ tally:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
                 table.sort(started)
                 for _, name in ipairs(started) do
                     local c = db.customers[name]
-                    if c.used >= c.total then cdb.finalRunActive = true break end
+                    if c.used >= c.total then
+                        cdb.finalRunActive = true
+                        cdb.finalRunEntered = true
+                        break
+                    end
                 end
                 if IAmAnnouncer() then
                     Announce("New Instance Run Detected")
