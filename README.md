@@ -45,7 +45,7 @@ The first time you open BoostBuddy it asks one question: **are you a booster or 
 - **Who has paid?** Customers show a red **unpaid** marker until their trade lands — payment is captured automatically from completed trades, or set with `/boost paid`. Hover any customer for their payment status.
 - **Private customer notes.** Right-click a customer to keep a note only you can see ("pays instantly", "AFKs forever"). Your notes greet you in chat whenever a noted player joins your group. Nothing is ever broadcast.
 - **Chat receipts for every run.** The group sees a clean announcement each run — one line per customer, with a loud, unambiguous **FINAL Run Begins Now!** on the last one, and a session-complete announcement when every package is done.
-- **Lockout awareness.** The hourly instance cap is tracked account-wide and warns you at 4/5 and 5/5 — before the door locks, not after.
+- **Lockout awareness.** The hourly instance cap is tracked account-wide; hitting it prints one chat line with the unlock time — no clutter, just the warning that matters.
 - **Ready Check & Reset Instance buttons.** Run your whole reset cycle from one window, with a loud alarm that wakes up AFK customers.
 - **Mistake-proof.** Suspicious runs (too fast, too little XP) are flagged with a one-click **[undo last count]** link in chat. Undo is always safe: it can only give runs back.
 - **Tamper-evident by design.** There are no quick count-adjust buttons anywhere. Every manual correction announces itself to the whole group with the name of who did it. The tally is a receipt, and nobody edits a receipt in secret.

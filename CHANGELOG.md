@@ -1,5 +1,18 @@
 # BoostBuddy Changelog
 
+## 1.1.1 — 2026-08-08
+
+- **Session-forming row.** Join a crew and pay before the first run? The
+  Ledger now shows a green "now" row immediately - crew name and gold
+  already counted - so paying never looks like a black hole. The row
+  becomes a real session at the first counted run.
+- **Ledger CSV export.** A CSV button in the Ledger's corner exports your
+  sessions - date, crew, runs, XP, averages, length, levels, gold, notes -
+  ready for any spreadsheet. (The per-run `/boost export` is still there.)
+- **The instance counter is out of the windows.** No more "instances: N/5"
+  in any title. Hitting the hourly cap now prints a single red chat line
+  with the unlock time, and that is all.
+
 ## 1.1.0 — 2026-08-08 — The Money Update
 
 BoostBuddy now answers the third question: how many runs, from whom - and

@@ -271,7 +271,7 @@ end
 
 -- copy-paste CSV export of the run ledger
 local exportFrame
-local function ShowExport()
+local function ShowExport(customText)
     if not exportFrame then
         exportFrame = CreateFrame("Frame", "BoostBuddyExport", UIParent, "BackdropTemplate")
         exportFrame:SetSize(400, 280)
@@ -307,12 +307,16 @@ local function ShowExport()
         scroll:SetScrollChild(eb)
         exportFrame.eb = eb
     end
-    local rows = { "run,xp,duration_seconds,completed_at" }
-    for i, run in ipairs(cdb.runs) do
-        table.insert(rows, ("%d,%d,%s,%s"):format(i, run.xp, run.dur or "",
-            run.t and date("%Y-%m-%d %H:%M:%S", run.t) or ""))
+    local text = customText
+    if not text then
+        local rows = { "run,xp,duration_seconds,completed_at" }
+        for i, run in ipairs(cdb.runs) do
+            table.insert(rows, ("%d,%d,%s,%s"):format(i, run.xp, run.dur or "",
+                run.t and date("%Y-%m-%d %H:%M:%S", run.t) or ""))
+        end
+        text = table.concat(rows, "\n")
     end
-    exportFrame.eb:SetText(table.concat(rows, "\n"))
+    exportFrame.eb:SetText(text)
     exportFrame:Show()
     exportFrame.eb:SetFocus()
     exportFrame.eb:HighlightText()
@@ -427,19 +431,6 @@ local function SessionMoney(s)
         end
     end
     return net
-end
-
--- instances entered across the whole account in the trailing hour, plus
--- seconds until the oldest one ages out (the 5/hour cap is account-wide)
-local function InstanceUses()
-    local now, n, oldest = time(), 0, nil
-    for _, t in ipairs(db.instanceLog or {}) do
-        if now - t < 3600 then
-            n = n + 1
-            if not oldest or t < oldest then oldest = t end
-        end
-    end
-    return n, oldest and (3600 - (now - oldest)) or 0
 end
 
 local function Render()
@@ -852,6 +843,11 @@ local function OnSpawnConfirmed(spawn)
     for i = #db.instanceLog, 1, -1 do
         if time() - db.instanceLog[i] > 3600 then table.remove(db.instanceLog, i) end
     end
+    if #db.instanceLog == 5 then
+        local oldest = db.instanceLog[1]
+        Print("|cffe05c4cthat's 5 instances inside an hour - the next fresh one unlocks in ~" ..
+            math.max(1, math.ceil((3600 - (time() - oldest)) / 60)) .. "m|r")
+    end
     if firstEver then
         db.cycleCounted = false
         if db.debug then Print("debug: instance spawn recorded (" .. spawn .. ")") end
@@ -1026,6 +1022,32 @@ local function RenderLedger()
         row:Show()
         yy = yy - 21
         return row
+    end
+
+    -- a freshly joined (and possibly freshly paid) crew shows up right away,
+    -- before its first run banks - so paying never looks like a black hole
+    if cdb.crewLeader then
+        local now = time()
+        local pending = 0
+        for _, tr in ipairs(cdb.trades or {}) do
+            if tr.crew == cdb.crewLeader and (now - tr.t) < 3600 then
+                pending = pending + (tr.give or 0) - (tr.get or 0)
+            end
+        end
+        local latest = sessions[#sessions]
+        local hasLive = latest and latest.leader == cdb.crewLeader
+            and latest.lastT and (now - latest.lastT) < 3600
+        if not hasLive then
+            local r = place()
+            r.bg:SetColorTexture(0.9, 0.78, 0.38, 0.07)
+            r.cols[1]:SetText(GREEN .. "now|r")
+            r.cols[2]:SetText(ClassColorName(DisplayName(cdb.crewLeader), cdb.crewClass) ..
+                GREY .. " - session forming|r")
+            if pending > 0 then
+                r.cols[8]:SetText(GOLD .. FmtGold(pending) .. "|r")
+            end
+            r.cols[9]:SetText(GREY .. "first run starts the session|r")
+        end
     end
 
     for dn, day in ipairs(dayOrder) do
@@ -1281,6 +1303,38 @@ local function BuildLedger()
     ledger.totals:SetFont(STANDARD_TEXT_FONT, 11)
     ledger.totals:SetPoint("BOTTOMLEFT", 12, 10)
 
+    local csvBtn = CreateFrame("Button", nil, ledger, "UIPanelButtonTemplate")
+    csvBtn:SetSize(50, 20)
+    csvBtn:SetPoint("BOTTOMRIGHT", -8, 6)
+    csvBtn:GetFontString():SetFont(STANDARD_TEXT_FONT, 10)
+    csvBtn:SetText("CSV")
+    csvBtn:SetScript("OnClick", function()
+        local function esc(v)
+            v = tostring(v or "")
+            if v:find('[",\n]') then v = '"' .. v:gsub('"', '""') .. '"' end
+            return v
+        end
+        local rows = { "date,start,crew,runs,xp,avg_xp,length_minutes,level_start,level_end,gold,note" }
+        for _, sess in ipairs(BuildSessions()) do
+            local money = SessionMoney(sess)
+            table.insert(rows, table.concat({
+                sess.firstT and date("%Y-%m-%d", sess.firstT) or "",
+                sess.firstT and date("%H:%M", sess.firstT) or "",
+                esc(sess.leader),
+                sess.runs,
+                sess.xp,
+                math.floor(sess.xp / math.max(1, sess.runs) + 0.5),
+                (sess.firstT and sess.lastT and sess.lastT > sess.firstT)
+                    and math.floor((sess.lastT - sess.firstT) / 60 + 0.5) or "",
+                sess.lvl0 or "",
+                sess.lvl1 or "",
+                money ~= 0 and math.floor(money / 10000 + 0.5) or "",
+                esc(db.crewNotes and db.crewNotes[sess.leader] or ""),
+            }, ","))
+        end
+        ShowExport(table.concat(rows, "\n"))
+    end)
+
     ledger:Hide()   -- frames spawn visible; the toggle expects hidden
 end
 
@@ -1393,17 +1447,8 @@ RefreshUI = function()
 
     -- first open: pick a side; the choice sticks (per character)
     local role = cdb.role
-    local uses, nextFree = InstanceUses()
-    local lockText = ""
-    -- the hourly instance cap is invisible until you're about to hit it
-    if uses >= 4 then
-        local color = uses >= 5 and "|cffe05c4c" or GOLD
-        lockText = color .. "   instances: " .. uses .. "/5"
-        if uses >= 5 then lockText = lockText .. " - next in " .. math.max(1, math.ceil(nextFree / 60)) .. "m" end
-        lockText = lockText .. "|r"
-    end
     title:SetText(GREEN .. "BoostBuddy|r" .. (role and
-        (GREY .. " - " .. (role == "booster" and "Booster" or "Customer") .. "|r") or "") .. lockText)
+        (GREY .. " - " .. (role == "booster" and "Booster" or "Customer") .. "|r") or ""))
     ui.overlayBtn:SetText("Overlay: " .. (db.tallyHide and "off" or "on"))
     if not role then
         hint:SetText(GOLD .. "Are you a customer or a booster?|r")
